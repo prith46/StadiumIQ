@@ -1,0 +1,38 @@
+{
+  "density": {
+    "sec-101": 0.45,
+    "sec-102": 0.50,
+    "sec-205": 0.85,
+    "sec-312": 0.20,
+    "concourse-1-n": 0.60,
+    "concourse-2-e": 0.40,
+    "gate-a": 0.90,
+    "gate-b": 0.30
+  },
+  "gateStatus": {
+    "gate-a": "congested",
+    "gate-b": "open",
+    "gate-c": "open",
+    "gate-d": "closed"
+  },
+  "incidents": [
+    {
+      "id": "inc-1001",
+      "type": "medical",
+      "zoneId": "sec-105",
+      "note": "Fan experiencing heat exhaustion, assistance required.",
+      "status": "pending",
+      "createdAt": 1783660800000
+    },
+    {
+      "id": "inc-1002",
+      "type": "crowd",
+      "zoneId": "gate-a",
+      "note": "High ticket queue bottleneck forming, need backup scanning resources.",
+      "status": "dispatched",
+      "createdAt": 1783661100000,
+      "responderId": "resp-02",
+      "etaSec": 120
+    }
+  ]
+}

@@ -1,0 +1,87 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@config "../tailwind.config.ts";
+
+:root {
+  --color-accent: #2563EB;
+  --color-accent-hover: #1D4ED8;
+  --color-canvas: #FAFAFA;
+  --color-surface: #FFFFFF;
+  --color-border: #E5E7EB;
+  --color-text-primary: #111827;
+  --color-text-secondary: #6B7280;
+  --color-inverse: #FFFFFF;
+  --color-surface-hover: #F9FAFB;
+  --color-track: #EDEFF2;
+  --color-danger-subtle: #FEF2F2;
+  --color-overlay: rgba(17, 24, 39, 0.1);
+  --color-heatmap-low: #C0DD97;
+  --color-heatmap-med: #FAC775;
+  --color-heatmap-high: #F09595;
+  --color-success: #16A34A;
+  --color-warning: #D97706;
+  --color-danger: #DC2626;
+
+  --radius-card: 12px;
+  --radius-control: 8px;
+  --radius-pill: 999px;
+
+  --shadow-card: 0 1px 3px rgba(17, 24, 39, 0.06), 0 1px 2px rgba(17, 24, 39, 0.04);
+  --shadow-elevated: 0 4px 12px rgba(17, 24, 39, 0.08);
+
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  --spacing-xxl: 48px;
+
+  --font-scale: 1;
+
+  /* Map shadcn theme variables to use our design system tokens */
+  --background: var(--color-canvas);
+  --foreground: var(--color-text-primary);
+  --card: var(--color-surface);
+  --card-foreground: var(--color-text-primary);
+  --popover: var(--color-surface);
+  --popover-foreground: var(--color-text-primary);
+  --primary: var(--color-accent);
+  --primary-foreground: var(--color-surface);
+  --secondary: var(--color-canvas);
+  --secondary-foreground: var(--color-text-primary);
+  --muted: var(--color-canvas);
+  --muted-foreground: var(--color-text-secondary);
+  --accent: var(--color-canvas);
+  --accent-foreground: var(--color-text-primary);
+  --destructive: var(--color-danger);
+  --destructive-foreground: var(--color-surface);
+  --border: var(--color-border);
+  --input: var(--color-border);
+  --ring: var(--color-accent);
+  --radius: 12px;
+}
+
+/* High contrast overrides */
+.high-contrast {
+  --color-text-secondary: #000000;
+  --color-border: #374151;
+  --border: #374151;
+  --muted-foreground: #000000;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-text-primary);
+    font-size: calc(1rem * var(--font-scale));
+    font-family: var(--font-sans), system-ui, sans-serif;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display), system-ui, sans-serif;
+  }
+}
