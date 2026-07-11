@@ -49,6 +49,12 @@ export interface SimConfig {
   seed: number;                // PRNG seed for timeline + per-zone jitter
 }
 
+export interface SosState {
+  active: boolean;
+  triggeredBy: 'fan' | 'organizer' | null;
+  triggeredAtSec: number;
+}
+
 export interface SimState {
   matchClockSec: number;
   density: Record<string, number>;
@@ -57,6 +63,7 @@ export interface SimState {
   routedLoad: Record<string, number>;
   sensorCounts: Record<string, number>;
   timeline: DensityFrame[];
+  sos?: SosState;
 }
 
 export interface DensityFrame {

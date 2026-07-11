@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { runOrganizerCopilot, FALLBACK_RESPONSE } from '@/lib/ai/agents';
-import { ZONES } from '@/lib/venue/venue';
+import { getCopilotBrief, getForecastBrief } from '@/lib/ai/copilot';
 
 const requestSchema = z.object({
-  query: z.string().max(2000),
+  type: z.enum(['brief', 'forecast']).default('brief'),
+  query: z.string().max(2000).optional(),
   simSnapshot: z.object({
     matchClockSec: z.number(),
     density: z.record(z.string(), z.number()),
@@ -14,7 +14,7 @@ const requestSchema = z.object({
     sensorCounts: z.record(z.string(), z.number()),
     timeline: z.array(z.any()).optional(),
   }),
-}).strict();
+});
 
 export async function POST(req: Request) {
   let body: any;
@@ -26,27 +26,29 @@ export async function POST(req: Request) {
 
   const result = requestSchema.safeParse(body);
   if (!result.success) {
-    // Never surface raw zod error internals to the client (§8).
     return NextResponse.json({ error: 'Invalid request payload' }, { status: 400 });
   }
 
   const validated = result.data;
-  const ctx = {
-    simSnapshot: {
-      ...validated.simSnapshot,
-      timeline: validated.simSnapshot.timeline || [],
-    },
-    zones: ZONES,
-  } as any;
 
   try {
-    const response = await runOrganizerCopilot(validated.query, ctx);
-    return NextResponse.json(response);
+    if (validated.type === 'forecast') {
+      const response = await getForecastBrief({
+        timeline: validated.simSnapshot.timeline || [],
+        matchClockSec: validated.simSnapshot.matchClockSec,
+      });
+      return NextResponse.json(response);
+    } else {
+      const response = await getCopilotBrief({
+        query: validated.query || 'what are my biggest risks now?',
+        incidents: validated.simSnapshot.incidents,
+        density: validated.simSnapshot.density,
+        gateStatus: validated.simSnapshot.gateStatus,
+      });
+      return NextResponse.json(response);
+    }
   } catch (err) {
     console.error('API copilot error:', err);
-    return NextResponse.json({
-      ...FALLBACK_RESPONSE,
-      language: 'en',
-    });
+    return NextResponse.json({ error: 'Copilot request failed' }, { status: 500 });
   }
 }

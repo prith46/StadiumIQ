@@ -219,4 +219,35 @@ describe('Zustand Simulation Store', () => {
     expect(snapshotAfter).toBe(snapshotBefore);
     expect(useSimStore.getState().density['sec-101']).toBe(0.33);
   });
+
+  // 9. SOS activation and BroadcastChannel synchronization
+  it('triggers SOS and broadcasts the trigger message to other tabs', () => {
+    const store = useSimStore.getState();
+    store.startEngine(mockZones);
+
+    // Initial state
+    expect(useSimStore.getState().sos?.active).toBe(false);
+
+    // Trigger SOS locally
+    store.triggerSos('fan');
+
+    const state = useSimStore.getState();
+    expect(state.sos?.active).toBe(true);
+    expect(state.sos?.triggeredBy).toBe('fan');
+    expect(state.sos?.triggeredAtSec).toBe(MATCH_START_SEC);
+  });
+
+  it('clears SOS and broadcasts the clear message to other tabs', () => {
+    const store = useSimStore.getState();
+    store.startEngine(mockZones);
+
+    // Trigger then clear
+    store.triggerSos('organizer');
+    expect(useSimStore.getState().sos?.active).toBe(true);
+
+    store.clearSos();
+    const state = useSimStore.getState();
+    expect(state.sos?.active).toBe(false);
+    expect(state.sos?.triggeredBy).toBeNull();
+  });
 });

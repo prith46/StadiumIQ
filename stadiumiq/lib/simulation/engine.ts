@@ -1,4 +1,5 @@
 import { Zone, SimState, SimConfig, MatchPhase, Incident } from '../types';
+import { decayRoutedLoad as externalDecayRoutedLoad } from '../engine/loadBalance';
 
 export const MATCH_START_SEC = -1800;   // pre-match window opens 30 min before kickoff
 export const FIRST_HALF_END_SEC = 2700; // 45:00
@@ -153,14 +154,7 @@ export function computeGateStatus(
 }
 
 export function decayRoutedLoad(routedLoad: Record<string, number>): Record<string, number> {
-  const next: Record<string, number> = {};
-  for (const [key, val] of Object.entries(routedLoad)) {
-    const decayed = val * ROUTED_LOAD_DECAY;
-    if (decayed >= 0.01) {
-      next[key] = decayed;
-    }
-  }
-  return next;
+  return externalDecayRoutedLoad(routedLoad, ROUTED_LOAD_DECAY);
 }
 
 export function pruneAndCountSessions(
@@ -210,7 +204,13 @@ export function tickSimulation(
     }
   }
 
-  const nextRoutedLoad = decayRoutedLoad(state.routedLoad);
+  const currentPhase = matchPhase(state.matchClockSec);
+  const nextPhase = matchPhase(nextMatchClockSec);
+  let nextRoutedLoad = decayRoutedLoad(state.routedLoad);
+
+  if (currentPhase !== nextPhase) {
+    nextRoutedLoad = {};
+  }
 
   return {
     matchClockSec: nextMatchClockSec,

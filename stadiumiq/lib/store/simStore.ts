@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { z } from 'zod';
-import { Zone, SimState, SimConfig, Incident, DensityFrame } from '../types';
+import { Zone, SimState, SimConfig, Incident, DensityFrame, FanContext, TicketData } from '../types';
 import { ZONES } from '../venue/venue';
 import {
   DEFAULT_SIM_CONFIG,
@@ -16,12 +16,22 @@ interface SimStore extends SimState {
   sessionId: string;
   isRunning: boolean;
   sessionHeartbeats: Record<string, Record<string, number>>; // zoneId -> sessionId -> lastSeenMs
+  fanContext: FanContext;
+  isOnboardingOverride?: boolean;
   startEngine: (zones: Zone[], config?: SimConfig) => void;
   stopEngine: () => void;
   heartbeat: (zoneId: string) => void;
   applyScenario: (patch: Partial<SimState>) => void;
   reset: (zones: Zone[], config?: SimConfig) => void;
   importDataset: (dataset: unknown) => { ok: true } | { ok: false; error: string };
+  setFanLocation: (zoneId: string) => void;
+  setFanTicket: (ticket: TicketData) => void;
+  setFanLanguage: (language: string) => void;
+  setSensoryPreferences: (sensory: Partial<NonNullable<FanContext['sensory']>>) => void;
+  setIsOnboardingOverride: (val: boolean) => void;
+  triggerSos: (triggeredBy: 'fan' | 'organizer') => void;
+  clearSos: () => void;
+  incrementRoutedLoad: (zoneId: string) => void;
 }
 
 // Module-level variables to track active execution details
@@ -89,6 +99,26 @@ export const useSimStore = create<SimStore>((set, get) => {
     sensorCounts: initialSensorCounts,
     timeline: [],
 
+    // FanContext
+    fanContext: {
+      language: 'en',
+      location: undefined,
+      accessibility: false,
+      sensory: undefined,
+      group: undefined,
+      leavingEarly: undefined,
+      ticket: undefined,
+    },
+
+    // SosState
+    sos: {
+      active: false,
+      triggeredBy: null,
+      triggeredAtSec: 0,
+    },
+
+    isOnboardingOverride: false,
+
     // Internal Store State
     sessionHeartbeats: {},
 
@@ -130,6 +160,11 @@ export const useSimStore = create<SimStore>((set, get) => {
         sensorCounts,
         timeline,
         sessionHeartbeats: {},
+        sos: {
+          active: false,
+          triggeredBy: null,
+          triggeredAtSec: 0,
+        },
       });
 
       if (!channelInstance) {
@@ -145,6 +180,7 @@ export const useSimStore = create<SimStore>((set, get) => {
                 routedLoad: msg.payload.routedLoad,
                 sensorCounts: msg.payload.sensorCounts,
                 timeline: msg.payload.timeline,
+                sos: msg.payload.sos || state.sos,
               });
             }
           } else if (msg.type === 'HEARTBEAT') {
@@ -167,6 +203,26 @@ export const useSimStore = create<SimStore>((set, get) => {
             if (msg.senderId !== state.sessionId) {
               const merged = mergeStatePatch(state, msg.dataset);
               set(merged);
+            }
+          } else if (msg.type === 'sos_trigger') {
+            if (msg.senderId !== state.sessionId) {
+              set({
+                sos: {
+                  active: true,
+                  triggeredBy: msg.triggeredBy,
+                  triggeredAtSec: msg.atSec,
+                },
+              });
+            }
+          } else if (msg.type === 'sos_clear') {
+            if (msg.senderId !== state.sessionId) {
+              set({
+                sos: {
+                  active: false,
+                  triggeredBy: null,
+                  triggeredAtSec: msg.atSec,
+                },
+              });
             }
           }
         });
@@ -290,6 +346,11 @@ export const useSimStore = create<SimStore>((set, get) => {
         sensorCounts,
         timeline,
         sessionHeartbeats: {},
+        sos: {
+          active: false,
+          triggeredBy: null,
+          triggeredAtSec: 0,
+        },
       });
 
       if (wasRunning) {
@@ -368,6 +429,114 @@ export const useSimStore = create<SimStore>((set, get) => {
       }
 
       return { ok: true };
+    },
+
+    setFanLocation: (zoneId: string) => {
+      // Register heartbeat
+      get().heartbeat(zoneId);
+
+      // Retrieve fresh state after heartbeat's set() has run
+      const state = get();
+      const prevLocation = state.fanContext.location;
+
+      // Mutate sensorCounts to prevent double count
+      const nextSensorCounts = { ...state.sensorCounts };
+      if (prevLocation && nextSensorCounts[prevLocation] !== undefined) {
+        nextSensorCounts[prevLocation] = Math.max(0, nextSensorCounts[prevLocation] - 1);
+      }
+      if (nextSensorCounts[zoneId] !== undefined) {
+        nextSensorCounts[zoneId] = (nextSensorCounts[zoneId] || 0) + 1;
+      }
+
+      set({
+        fanContext: {
+          ...state.fanContext,
+          location: zoneId,
+        },
+        sensorCounts: nextSensorCounts,
+      });
+    },
+
+    setFanTicket: (ticket: TicketData) => {
+      const state = get();
+      set({
+        fanContext: {
+          ...state.fanContext,
+          ticket,
+        },
+      });
+    },
+
+    setFanLanguage: (language: string) => {
+      const state = get();
+      set({
+        fanContext: {
+          ...state.fanContext,
+          language,
+        },
+      });
+    },
+
+    setIsOnboardingOverride: (val: boolean) => {
+      set({ isOnboardingOverride: val });
+    },
+
+    setSensoryPreferences: (sensory: Partial<NonNullable<FanContext['sensory']>>) => {
+      const state = get();
+      set({
+        fanContext: {
+          ...state.fanContext,
+          sensory: { ...state.fanContext.sensory, ...sensory },
+        },
+      });
+    },
+
+    incrementRoutedLoad: (zoneId: string) => {
+      const state = get();
+      const current = state.routedLoad[zoneId] ?? 0;
+      set({ routedLoad: { ...state.routedLoad, [zoneId]: current + 1 } });
+    },
+
+    triggerSos: (triggeredBy: 'fan' | 'organizer') => {
+      const state = get();
+      const currentClock = state.matchClockSec;
+      const newSos = {
+        active: true,
+        triggeredBy,
+        triggeredAtSec: currentClock,
+      };
+      set({ sos: newSos });
+
+      if (channelInstance) {
+        channelInstance.post({
+          type: 'sos_trigger',
+          triggeredBy,
+          atSec: currentClock,
+          senderId: state.sessionId,
+          timestamp: Date.now(),
+        });
+      }
+    },
+
+    clearSos: () => {
+      const state = get();
+      const currentClock = state.matchClockSec;
+      const newSos = {
+        active: false,
+        triggeredBy: null,
+        triggeredAtSec: currentClock,
+      };
+      set({ sos: newSos });
+
+      if (channelInstance) {
+        channelInstance.post({
+          type: 'sos_clear',
+          triggeredBy: state.sos?.triggeredBy || 'fan',
+          atSec: currentClock,
+          senderId: state.sessionId,
+          timestamp: Date.now(),
+        });
+      }
     },
   };
 });

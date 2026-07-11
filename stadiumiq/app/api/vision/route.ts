@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { createClient } from '@/lib/ai/client';
-import { VISION_TICKET_PROMPT } from '@/lib/ai/prompts';
-import { ChatMessage } from '@/lib/ai/client';
+import { detectLanguageFromTicket } from '@/lib/ai/languageDetection';
 
 const requestSchema = z.object({
   imageBase64: z.string(),
@@ -23,17 +21,6 @@ const requestSchema = z.object({
   }),
 }).strict();
 
-const NATIONALITY_TO_LANG: Record<string, string> = {
-  USA: 'en',
-  MEX: 'es',
-  FRA: 'fr',
-  BRA: 'pt',
-  JPN: 'ja',
-  KOR: 'ko',
-  ARG: 'es',
-  GER: 'de',
-};
-
 export async function POST(req: Request) {
   let body: any;
   try {
@@ -44,21 +31,19 @@ export async function POST(req: Request) {
 
   const result = requestSchema.safeParse(body);
   if (!result.success) {
-    // Never surface raw zod error internals to the client (§8).
     return NextResponse.json({ error: 'Invalid request payload' }, { status: 400 });
   }
 
   const validated = result.data;
   
   // Validate base64 decoded size <= 5MB
-  // A base64 string has 4 chars for every 3 bytes. Approximate check:
   const approximateBytes = (validated.imageBase64.length * 3) / 4;
   if (approximateBytes > 5 * 1024 * 1024) {
     return NextResponse.json({ error: 'Payload too large: Image exceeds 5MB' }, { status: 400 });
   }
 
   // Graceful fallback response when vision is unsupported or fails
-  const fallbackMessage = "Vision services are currently unavailable. Please select your language manually from the accessibility menu.";
+  const fallbackMessage = "Vision services are unavailable or failed. Please select your language manually.";
   const fallbackResponse = {
     message: fallbackMessage,
     language: validated.fanContext.language || 'en',
@@ -67,58 +52,27 @@ export async function POST(req: Request) {
     meta: { tool: 'vision-unavailable' },
   };
 
-  let client;
   try {
-    client = createClient();
-  } catch (err) {
-    console.error('Failed to create AI client:', err);
-    return NextResponse.json(fallbackResponse);
-  }
-
-  if (!client.supportsVision) {
-    return NextResponse.json(fallbackResponse);
-  }
-
-  try {
-    const messages: ChatMessage[] = [
-      { role: 'system', content: VISION_TICKET_PROMPT },
-      { role: 'user', content: 'Here is my ticket photo.' }
-    ];
-
-    const chatResult = await client.visionChat(messages, validated.imageBase64, validated.mimeType);
-    if (!chatResult.text) {
+    const detectResult = await detectLanguageFromTicket(validated.imageBase64, validated.mimeType);
+    if ('error' in detectResult) {
+      console.error('Language detection error:', detectResult.error);
       return NextResponse.json(fallbackResponse);
     }
 
-    let cleanJson = chatResult.text.trim();
-    if (cleanJson.startsWith('```')) {
-      cleanJson = cleanJson.replace(/^```[a-zA-Z]*\n/, '').replace(/\n```$/, '').trim();
-    }
-
-    const modelJson = JSON.parse(cleanJson);
-    let resolvedLanguage = 'en';
-
-    if (modelJson.language) {
-      const code = modelJson.language.trim().toUpperCase();
-      if (NATIONALITY_TO_LANG[code]) {
-        resolvedLanguage = NATIONALITY_TO_LANG[code];
-      } else if (Object.values(NATIONALITY_TO_LANG).includes(modelJson.language.toLowerCase())) {
-        resolvedLanguage = modelJson.language.toLowerCase();
-      } else {
-        resolvedLanguage = 'en';
-      }
-    }
+    const ticket = detectResult.ticketData;
+    const mapActions = ticket?.section ? [{ type: 'highlightZone', zoneId: ticket.section, pulse: true }] : [];
 
     return NextResponse.json({
-      message: modelJson.message || 'Ticket processed successfully.',
-      language: resolvedLanguage,
-      mapActions: modelJson.mapActions || [],
-      alertLevel: modelJson.alertLevel || 'none',
-      meta: { tool: 'vision-ticket' }
+      message: 'Ticket processed successfully.',
+      language: detectResult.language,
+      ticket: ticket,
+      mapActions: mapActions,
+      alertLevel: 'none',
+      meta: { tool: 'vision-ticket', confidence: detectResult.confidence }
     });
 
   } catch (err) {
-    console.error('Vision processing error:', err);
+    console.error('Vision processing exception:', err);
     return NextResponse.json(fallbackResponse);
   }
 }

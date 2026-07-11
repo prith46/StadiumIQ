@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { FanContext, Zone, SimState } from '../types';
 import { createClient, ChatMessage } from './client';
-import { executeTool, getToolSchemas, ToolContext, ToolSchema, detectStressHeuristic } from './tools';
+import { executeTool, getToolSchemas, ToolContext, ToolSchema } from './tools';
+import { detectStressHeuristic } from './stressDetection';
 import { FAN_SYSTEM_PROMPT, COPILOT_SYSTEM_PROMPT } from './prompts';
 
 export interface AssistantResponse {

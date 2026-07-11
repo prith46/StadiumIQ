@@ -5,6 +5,11 @@ import { motion, useReducedMotion } from "framer-motion"
 import { RoleToggle } from "@/components/RoleToggle"
 import { A11yControls } from "@/components/A11yControls"
 import { fadeTransition } from "@/lib/motion/transitions"
+import { useRoleStore } from "@/lib/store/roleStore"
+import { useSimStore } from "@/lib/store/simStore"
+import { ChangeSeatControl } from "@/components/onboarding/ChangeSeatControl"
+import { SensoryPreferences } from "@/components/settings/SensoryPreferences"
+import { LanguagePicker } from "@/components/LanguagePicker"
 
 interface AppShellProps {
   children: React.ReactNode
@@ -28,8 +33,58 @@ function BrandMark() {
   )
 }
 
+function SosHeaderButton() {
+  const sos = useSimStore((s) => s.sos);
+  const triggerSos = useSimStore((s) => s.triggerSos);
+  const [confirmSos, setConfirmSos] = React.useState(false);
+  const confirmTimeoutRef = React.useRef<any>(null);
+
+  const handleSosClick = () => {
+    if (confirmSos) {
+      triggerSos("fan");
+      setConfirmSos(false);
+      if (confirmTimeoutRef.current) clearTimeout(confirmTimeoutRef.current);
+    } else {
+      setConfirmSos(true);
+      confirmTimeoutRef.current = setTimeout(() => {
+        setConfirmSos(false);
+      }, 3000);
+    }
+  };
+
+  React.useEffect(() => {
+    return () => {
+      if (confirmTimeoutRef.current) clearTimeout(confirmTimeoutRef.current);
+    };
+  }, []);
+
+  if (sos?.active) {
+    return (
+      <span className="px-3 py-1.5 rounded-control text-xs font-black bg-red-600 text-white animate-pulse shadow-md border border-red-500">
+        SOS ACTIVE
+      </span>
+    );
+  }
+
+  return (
+    <button
+      onClick={handleSosClick}
+      className={`px-3 py-1.5 rounded-control text-xs font-black transition-all cursor-pointer shadow-md ${
+        confirmSos
+          ? "bg-yellow-500 hover:bg-yellow-600 text-black animate-bounce"
+          : "bg-red-600 hover:bg-red-700 text-white hover:scale-105 active:scale-95"
+      }`}
+    >
+      {confirmSos ? "Confirm SOS?" : "SOS"}
+    </button>
+  );
+}
+
 export function AppShell({ children }: AppShellProps) {
   const shouldReduceMotion = useReducedMotion()
+  const role = useRoleStore((s) => s.role)
+  const location = useSimStore((s) => s.fanContext.location)
+  const setIsOnboardingOverride = useSimStore((s) => s.setIsOnboardingOverride)
 
   return (
     <motion.div
@@ -59,7 +114,17 @@ export function AppShell({ children }: AppShellProps) {
           </div>
 
           {/* A11yControls Right */}
-          <div className="flex items-center">
+          <div className="flex items-center gap-4">
+            {role === "fan" && (
+              <SosHeaderButton />
+            )}
+            {role === "fan" && location && (
+              <>
+                <ChangeSeatControl onChangeSeat={() => setIsOnboardingOverride(true)} />
+                <SensoryPreferences />
+              </>
+            )}
+            <LanguagePicker />
             <A11yControls />
           </div>
         </div>

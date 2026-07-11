@@ -1,6 +1,12 @@
 import { Zone, SimState, FanContext } from '../types';
-import { POIS, getEdgesFrom } from '../venue/venue';
+import { POIS, ZONES, EDGES, getEdgesFrom } from '../venue/venue';
+import { computeRoute as engineComputeRoute, RouteFilters } from '../engine/routing';
+import { resolveDestination, DestinationQuery } from '../engine/destinationResolver';
+import { sensoryToRouteFilters } from '../engine/sensoryFilters';
 import { retrieve } from './rag';
+import { getForecast, getPeakCrush, ForecastSource } from '../engine/forecast';
+import { computeBaseDensity } from '../simulation/engine';
+import { detectStressHeuristic } from './stressDetection';
 
 export class UnknownToolError extends Error {
   constructor(message: string) {
@@ -26,84 +32,212 @@ export interface ToolDefinition {
   execute: (args: Record<string, any>, ctx: ToolContext) => Promise<unknown> | unknown;
 }
 
-export function detectStressHeuristic(text: string): { stress: boolean; matchedSignals: string[] } {
-  const signals: string[] = [];
-  const lower = text.toLowerCase();
-
-  const keywords = [
-    'help',
-    'scared',
-    "can't breathe",
-    'cant breathe',
-    'lost my',
-    'emergency',
-    'panic',
-    'fire',
-    'danger',
-    'injured',
-    'evacuate',
-    'stuck',
-  ];
-  
-  for (const keyword of keywords) {
-    if (lower.includes(keyword)) {
-      signals.push(`keyword:${keyword}`);
-    }
-  }
-
-  if (text.includes('!!')) {
-    signals.push('exclamation');
-  }
-
-  if (text.length > 10) {
-    let alphaCount = 0;
-    let upperCount = 0;
-    for (let i = 0; i < text.length; i++) {
-      const char = text[i];
-      if (/[a-zA-Z]/.test(char)) {
-        alphaCount++;
-        if (char === char.toUpperCase()) {
-          upperCount++;
-        }
-      }
-    }
-    if (alphaCount > 0 && (upperCount / alphaCount) > 0.6) {
-      signals.push('all-caps');
-    }
-  }
-
-  return {
-    stress: signals.length > 0,
-    matchedSignals: signals,
-  };
-}
-
 export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
   computeRoute: {
     schema: {
       name: 'computeRoute',
-      description: 'Calculates the optimal walking path and ETA between zones in the stadium.',
+      description:
+        'Calculates the optimal, crowd-aware walking path and ETA between zones in the stadium. ' +
+        'Accepts a destination zone id, a POI type (e.g. "restroom"), or "nearestExit". ' +
+        'Returns path (ordered zone ids), etaSec, and a reason object naming any congested ' +
+        'zones/gates that were avoided so the LLM can phrase the explanation accurately. ' +
+        'Infer sensory filters from natural phrasing for a ONE-TIME request: "claustrophobic" ' +
+        'or "keep me in open air" -> avoidEnclosed: true; "quietest way"/"sleeping toddler" -> ' +
+        'maxNoise: "low"; "I\'m an away fan"/"avoid the home section" -> avoidAffiliation set to ' +
+        'the section the fan wants to avoid. Only pass these explicitly when the fan is asking ' +
+        'for THIS route specifically — if they say it should always apply, tell them to use the ' +
+        'sensory preferences panel instead of relying on this one-time filter.',
       parameters: {
         type: 'object',
         properties: {
-          fromZoneId: { type: 'string', description: 'Starting zone ID' },
-          toZoneId: { type: 'string', description: 'Ending zone ID' },
-          accessibility: { type: 'boolean', description: 'Whether the route must be step-free' },
+          originZoneId: {
+            type: 'string',
+            description:
+              'Starting zone ID (preferred). Also accepts legacy alias fromZoneId. ' +
+              'If omitted, falls back to fanContext.location from the store.',
+          },
+          fromZoneId: {
+            type: 'string',
+            description:
+              'Legacy alias for originZoneId. Present for backward compatibility with ' +
+              'pre-M3 callers that used the stub schema. New callers should use originZoneId.',
+          },
+          destination: {
+            type: 'object',
+            description: 'What to route to. One of: zone id, POI type, or nearest exit.',
+            properties: {
+              kind: {
+                type: 'string',
+                enum: ['zone', 'poiType', 'nearestExit'],
+              },
+              zoneId: { type: 'string', description: 'Zone id (when kind=zone)' },
+              poiType: {
+                type: 'string',
+                description: 'POI type (when kind=poiType), e.g. restroom, food, first_aid',
+              },
+            },
+            required: ['kind'],
+          },
+          filters: {
+            type: 'object',
+            description: 'Optional route filters.',
+            properties: {
+              accessibleOnly: {
+                type: 'boolean',
+                description: 'If true, exclude stairs-only (inaccessible) edges. Hard filter.',
+              },
+              avoidEnclosed: {
+                type: 'boolean',
+                description: 'Penalise enclosed passages (soft filter, 3× weight).',
+              },
+              maxNoise: {
+                type: 'string',
+                enum: ['low', 'med', 'high'],
+                description: 'Penalise edges louder than this level (soft filter).',
+              },
+              avoidAffiliation: {
+                type: 'string',
+                enum: ['home', 'away'],
+                description: 'Penalise zones of this crowd affiliation (soft filter).',
+              },
+            },
+          },
         },
-        required: ['fromZoneId', 'toZoneId'],
+        // Support either new or legacy origin param
+        required: [],
       },
     },
-    execute: (args) => {
-      // TODO(M3): Replace with lib/engine/routing.ts computeRoute() once M3 lands.
-      return {
-        path: [] as string[],
-        etaSec: 0,
-        reason: { crowdedZones: [] as string[], avoidedGates: [] as string[] },
-        __stub: true,
+    execute: (args, ctx) => {
+      // Resolve origin — prefer originZoneId, fall back to legacy fromZoneId
+      const rawOrigin: string | undefined =
+        (args.originZoneId as string | undefined) ??
+        (args.fromZoneId as string | undefined) ??
+        ctx.fanContext?.location;
+
+      if (!rawOrigin) {
+        return {
+          error: 'invalid_zone_id',
+          message: "I couldn't determine your current location. Please specify your zone.",
+        };
+      }
+
+      // Validate origin against known zones (security: no hallucinated ids)
+      const knownZoneIds = new Set(ZONES.map((z) => z.id));
+      if (!knownZoneIds.has(rawOrigin)) {
+        return {
+          error: 'invalid_zone_id',
+          message: `I couldn't find the zone "${rawOrigin}". Please check the zone ID.`,
+        };
+      }
+
+      // Resolve destination query
+      const rawDest = args.destination as Record<string, unknown> | undefined;
+      let destinationQuery: DestinationQuery;
+
+      if (!rawDest || rawDest.kind === 'nearestExit') {
+        destinationQuery = { kind: 'nearestExit' };
+      } else if (rawDest.kind === 'poiType') {
+        destinationQuery = {
+          kind: 'poiType',
+          poiType: rawDest.poiType as DestinationQuery extends { kind: 'poiType' }
+            ? DestinationQuery['poiType']
+            : never,
+        };
+      } else {
+        // kind === 'zone'
+        const destZoneId = rawDest.zoneId as string | undefined;
+        if (!destZoneId || !knownZoneIds.has(destZoneId)) {
+          return {
+            error: 'invalid_zone_id',
+            message: destZoneId
+              ? `I couldn't find the destination zone "${destZoneId}".`
+              : 'No destination zone id provided.',
+          };
+        }
+        destinationQuery = { kind: 'zone', zoneId: destZoneId };
+      }
+
+      // Extract live state from context snapshot
+      const { density, routedLoad, gateStatus } = ctx.simSnapshot;
+
+      // Build POI status map from live POIS
+      const poiStatus: Record<string, 'open' | 'busy' | 'closed'> = {};
+      for (const poi of POIS) poiStatus[poi.id] = poi.status;
+
+      // Resolve destination to concrete zone id
+      const resolvedZoneId = resolveDestination(
+        destinationQuery,
+        rawOrigin,
+        EDGES,
+        ZONES,
+        POIS,
+        density,
+        poiStatus,
+        gateStatus
+      );
+
+      if (typeof resolvedZoneId !== 'string') {
+        return {
+          error: resolvedZoneId.error,
+          message:
+            resolvedZoneId.error === 'no_matching_poi'
+              ? "I couldn't find an open amenity of that type near you."
+              : resolvedZoneId.error === 'no_open_exit'
+              ? 'All exits are currently closed.'
+              : "I couldn't find that location.",
+        };
+      }
+
+      // Parse filters — a ONE-TIME LLM-explicit filter for this call takes
+      // precedence per-field over the fan's persistent sensory defaults;
+      // fields the LLM did not specify fall back to the persistent default.
+      const rawFilters = args.filters as RouteFilters | undefined;
+      const persistentSensory = sensoryToRouteFilters(ctx.fanContext?.sensory);
+      const filters: RouteFilters = {
+        accessibleOnly:
+          rawFilters?.accessibleOnly ?? (ctx.fanContext?.accessibility || false),
+        avoidEnclosed: rawFilters?.avoidEnclosed ?? persistentSensory.avoidEnclosed,
+        maxNoise: rawFilters?.maxNoise ?? persistentSensory.maxNoise,
+        avoidAffiliation: rawFilters?.avoidAffiliation ?? persistentSensory.avoidAffiliation,
       };
+
+      // Call pure routing engine
+      const result = engineComputeRoute(
+        rawOrigin,
+        resolvedZoneId,
+        EDGES,
+        ZONES,
+        density,
+        routedLoad,
+        gateStatus,
+        filters
+      );
+
+      if ('error' in result) {
+        return {
+          error: result.error,
+          message:
+            result.error === 'no_accessible_route_found'
+              ? 'No accessible route found to that destination. You may need to use stairs.'
+              : "I couldn't find a route to that destination.",
+        };
+      }
+
+      // §6.3: increment routedLoad at the exit gate on the path
+      // (done here in the tool adapter since routingService is not used by F4 directly)
+      try {
+        const { useSimStore } = require('../store/simStore');
+        const exitZone = [...result.path].reverse().find((id: string) => id.startsWith('gate-'));
+        if (exitZone) {
+          useSimStore.getState().incrementRoutedLoad(exitZone);
+        }
+      } catch {
+        // Store not available in test context — safe to swallow
+      }
+
+      return result;
     },
   },
-
   findAmenity: {
     schema: {
       name: 'findAmenity',
@@ -177,12 +311,95 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
         required: ['zoneId', 'timeSec'],
       },
     },
-    execute: () => {
-      // TODO(M7): Replace with real forecasting lookup from simulation snapshot.
+    execute: (args, ctx) => {
+      const zoneId = args.zoneId as string;
+      const timeSec = args.timeSec as number;
+
+      const zone = ZONES.find((z) => z.id === zoneId);
+      if (!zone) {
+        return { error: 'invalid_zone_id' };
+      }
+
+      // Clamp relative target time (e.g. 0 to 7200 seconds / 120 minutes)
+      const clampedTimeSec = Math.min(7200, Math.max(0, timeSec));
+      const minutesAhead = Math.round(clampedTimeSec / 60);
+
+      // Build ForecastSource from ctx.simSnapshot
+      const simState = ctx.simSnapshot;
+      const source: ForecastSource =
+        simState.timeline && simState.timeline.length > 0
+          ? { kind: 'timeline', frames: simState.timeline }
+          : {
+              kind: 'projection',
+              currentDensity: simState.density,
+              projectFn: (zId: string, atMatchClockSec: number) => {
+                const z = ZONES.find((zn) => zn.id === zId);
+                if (!z) return 0;
+                return computeBaseDensity(z, atMatchClockSec);
+              },
+            };
+
+      const forecast = getForecast(zoneId, minutesAhead, simState.matchClockSec, source);
+      const peak = getPeakCrush(zoneId, simState.matchClockSec, source);
+
       return {
-        predictedDensity: {} as Record<string, number>,
-        peakCrushAtSec: null as number | null,
-        __stub: true,
+        zoneId: forecast.zoneId,
+        minutesAhead: forecast.minutesAhead,
+        predictedDensity: forecast.predictedDensity,
+        extrapolated: forecast.extrapolated,
+        peakCrush: {
+          peakMatchClockSec: peak.peakMatchClockSec,
+          peakDensity: peak.peakDensity,
+          minutesFromNow: peak.minutesFromNow,
+          extrapolated: peak.extrapolated,
+        },
+      };
+    },
+  },
+
+  getPeakCrush: {
+    schema: {
+      name: 'getPeakCrush',
+      description: 'Finds the predicted peak congestion time and value for a given zone.',
+      parameters: {
+        type: 'object',
+        properties: {
+          zoneId: { type: 'string', description: 'Zone ID to check' },
+        },
+        required: ['zoneId'],
+      },
+    },
+    execute: (args, ctx) => {
+      const zoneId = args.zoneId as string;
+
+      const zone = ZONES.find((z) => z.id === zoneId);
+      if (!zone) {
+        return { error: 'invalid_zone_id' };
+      }
+
+      // Build ForecastSource from ctx.simSnapshot
+      const simState = ctx.simSnapshot;
+      const source: ForecastSource =
+        simState.timeline && simState.timeline.length > 0
+          ? { kind: 'timeline', frames: simState.timeline }
+          : {
+              kind: 'projection',
+              currentDensity: simState.density,
+              projectFn: (zId: string, atMatchClockSec: number) => {
+                const z = ZONES.find((zn) => zn.id === zId);
+                if (!z) return 0;
+                return computeBaseDensity(z, atMatchClockSec);
+              },
+            };
+
+      const peak = getPeakCrush(zoneId, simState.matchClockSec, source);
+
+      return {
+        zoneId: peak.zoneId,
+        peakMatchClockSec: peak.peakMatchClockSec,
+        peakDensity: peak.peakDensity,
+        minutesFromNow: peak.minutesFromNow,
+        extrapolated: peak.extrapolated,
       };
     },
   },

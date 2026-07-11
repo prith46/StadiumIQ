@@ -5,7 +5,9 @@ export type ChannelMessage =
   | { type: 'HEARTBEAT'; zoneId: string; sessionId: string; timestamp: number }
   | { type: 'SCENARIO'; patch: Partial<SimState>; senderId: string; timestamp: number }
   | { type: 'RESET'; senderId: string; timestamp: number }
-  | { type: 'IMPORT'; dataset: UploadDataset; senderId: string; timestamp: number };
+  | { type: 'IMPORT'; dataset: UploadDataset; senderId: string; timestamp: number }
+  | { type: 'sos_trigger'; triggeredBy: 'fan' | 'organizer'; atSec: number; senderId: string; timestamp: number }
+  | { type: 'sos_clear'; triggeredBy: 'fan' | 'organizer'; atSec: number; senderId: string; timestamp: number };
 
 export const CHANNEL_NAME = 'stadiumiq';
 
@@ -28,7 +30,7 @@ export function createSimChannel(
       if (
         msg &&
         typeof msg === 'object' &&
-        ['STATE_SYNC', 'HEARTBEAT', 'SCENARIO', 'RESET', 'IMPORT'].includes(msg.type)
+        ['STATE_SYNC', 'HEARTBEAT', 'SCENARIO', 'RESET', 'IMPORT', 'sos_trigger', 'sos_clear'].includes(msg.type)
       ) {
         onMessage(msg as ChannelMessage);
       }
