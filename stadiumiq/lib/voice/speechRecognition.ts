@@ -25,19 +25,37 @@ export function createSpeechRecognizer(
     recognition.interimResults = true;
     recognition.lang = languageTag;
 
+    // Accumulates finalized text across the whole session. `event.results`
+    // only reports results from `event.resultIndex` onward each time (the
+    // portion that's new/changed) — results before that index are already
+    // final and won't be repeated. Without this, each event would only ever
+    // report its own delta, so pausing mid-sentence (which commits a final
+    // result and advances resultIndex) would silently drop everything said
+    // before the pause on the next partial result.
+    let finalizedTranscript = "";
+
     recognition.onresult = (event: any) => {
-      let transcript = "";
+      let newFinalSegment = "";
+      let interimSegment = "";
       let isFinal = false;
+
       for (let i = event.resultIndex; i < event.results.length; ++i) {
         const item = event.results[i];
         if (item && item[0]) {
-          transcript += item[0].transcript;
           if (item.isFinal) {
+            newFinalSegment += item[0].transcript;
             isFinal = true;
+          } else {
+            interimSegment += item[0].transcript;
           }
         }
       }
-      onResult({ transcript, isFinal });
+
+      if (newFinalSegment) {
+        finalizedTranscript += newFinalSegment;
+      }
+
+      onResult({ transcript: (finalizedTranscript + interimSegment).trim(), isFinal });
     };
 
     recognition.onerror = (event: any) => {

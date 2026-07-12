@@ -10,6 +10,9 @@ describe('Incentive Triage Service Integration', () => {
   const gates = ZONES.filter((z) => z.type === 'gate');
   const gateA = gates[0]?.id || 'gate-a';
   const gateB = gates[1]?.id || 'gate-b';
+  // Fan's real current location — incentives must be personalized against this,
+  // not fire blindly for every bottleneck stadium-wide (see M9-1/M9-2 fix).
+  const fanZone = ZONES.find((z) => z.type === 'section')?.id || 'sec-101';
 
   beforeEach(() => {
     // Reset stores before each test
@@ -21,8 +24,26 @@ describe('Incentive Triage Service Integration', () => {
       incidents: [],
       sensorCounts: {},
       timeline: [],
+      fanContext: {
+        ...useSimStore.getState().fanContext,
+        location: fanZone,
+      },
     });
     useIncentiveStore.getState().reset();
+  });
+
+  it('does nothing when fanContext.location is unset — nothing to personalize against', () => {
+    useSimStore.setState({
+      density: { [gateA]: 0.9 },
+      fanContext: {
+        ...useSimStore.getState().fanContext,
+        location: undefined,
+      },
+    });
+
+    runIncentiveTriageService();
+
+    expect(useIncentiveStore.getState().activeIncentives).toHaveLength(0);
   });
 
   // ---------------------------------------------------------------------------
@@ -42,7 +63,9 @@ describe('Incentive Triage Service Integration', () => {
 
     const incentive = active[0];
     expect(incentive).toBeDefined();
-    expect(incentive.fromZone).toBe(gateA);
+    // fromZone must be the fan's own real location (M9-1) — "View Clear Reroute"
+    // computes its route from this field, so it must match where the fan is.
+    expect(incentive.fromZone).toBe(fanZone);
     expect(incentive.reward).toContain('10% off concession');
 
     // Confirm POI type is food or merch
@@ -95,7 +118,7 @@ describe('Incentive Triage Service Integration', () => {
     // Parse using the new parseIncentivePayload helper
     const parsed = parseIncentivePayload(payloadStr);
     expect(parsed).not.toBeNull();
-    expect(parsed?.fromZone).toBe(gateA);
+    expect(parsed?.fromZone).toBe(fanZone);
     expect(parsed?.toZone).toBe(active[0].toZone);
     expect(parsed?.reward).toBe(active[0].reward);
   });
@@ -121,6 +144,42 @@ describe('Incentive Triage Service Integration', () => {
       reward: '10% off',
     });
     expect(parseIncentivePayload(badZones)).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------------
+  // M9-1/M9-2 — Personalization and duplicate-stacking prevention
+  // ---------------------------------------------------------------------------
+
+  it('offers at most one incentive even when multiple unrelated gates are simultaneously congested', () => {
+    // Congest every gate in the venue at once — previously this fired one
+    // incentive PER bottleneck (stacking), regardless of the fan's location.
+    const allGatesDensity: Record<string, number> = {};
+    for (const g of ZONES.filter((z) => z.type === 'gate')) {
+      allGatesDensity[g.id] = 0.9;
+    }
+
+    useSimStore.setState({ density: allGatesDensity });
+
+    runIncentiveTriageService();
+
+    const active = useIncentiveStore.getState().activeIncentives;
+    expect(active.length).toBeLessThanOrEqual(1);
+  });
+
+  it('does not stack a duplicate offer when triage re-runs for the same bottleneck on the next tick', () => {
+    useSimStore.setState({ density: { [gateA]: 0.9 } });
+
+    runIncentiveTriageService();
+    const firstCount = useIncentiveStore.getState().activeIncentives.length;
+    expect(firstCount).toBeGreaterThan(0);
+
+    // Advance the sim clock slightly (still well within the 300s cooldown /
+    // same per-minute id bucket) and re-run triage as the hook would on the
+    // next tick — must NOT add a second card for the same bottleneck.
+    useSimStore.setState({ matchClockSec: 1010 });
+    runIncentiveTriageService();
+
+    expect(useIncentiveStore.getState().activeIncentives.length).toBe(firstCount);
   });
 
   // ---------------------------------------------------------------------------

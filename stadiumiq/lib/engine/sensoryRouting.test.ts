@@ -155,6 +155,8 @@ describe('Hyper-Sensory / Emotional Routing (M10)', () => {
     const baseline = computeRoute('A', 'D', mockEdges, mockZones, density, routedLoad, gateStatus);
     const sensoryEmpty = computeRoute('A', 'D', mockEdges, mockZones, density, routedLoad, gateStatus, {}, {});
 
-    expect(!('error' in baseline) && !('error' in sensoryEmpty) && baseline.path).toEqual(sensoryEmpty.path);
+    const pathBaseline = !('error' in baseline) ? baseline.path : [];
+    const pathEmpty = !('error' in sensoryEmpty) ? sensoryEmpty.path : [];
+    expect(pathBaseline).toEqual(pathEmpty);
   });
 });

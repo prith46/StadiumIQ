@@ -39,7 +39,7 @@ export const AlertStackComponent: React.FC<AlertStackProps> = ({
 
   if (inline) {
     return (
-      <div className="flex flex-col gap-3 w-full max-h-[350px] overflow-y-auto p-1 scrollbar-thin" data-testid="alert-stack-inline">
+      <div className="flex flex-col gap-3 w-full p-1" data-testid="alert-stack-inline">
         {alertsToRender.map((alert) => (
           <AlertCard
             key={alert.id}

@@ -29,7 +29,7 @@ export function GodMode() {
     reset(ZONES);
 
     // Apply new scenario patch
-    applyScenario(scenario.patch);
+    applyScenario(scenario.patch, true);
     setActiveScenarioId(scenarioId);
   };
 
@@ -42,7 +42,7 @@ export function GodMode() {
   const activeScenario = GOD_MODE_SCENARIOS.find((s) => s.id === activeScenarioId);
 
   return (
-    <div className="flex flex-col gap-4 h-full" data-testid="god-mode-container">
+    <div className="flex flex-col gap-4 h-full" data-testid="god-mode-container" role="region" aria-label="Simulation Controls">
       {/* 1. Header Active Indicator */}
       <div className="flex items-center justify-between border-b border-border/60 pb-2">
         <span className="text-[10px] text-text-secondary uppercase font-bold tracking-wider">Live Simulation State</span>
@@ -59,23 +59,27 @@ export function GodMode() {
         </span>
       </div>
 
-      {/* 2. Scenario Presets Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      {/* 2. Scenario Presets Row — stacked in a single column, not a 3-across
+           grid: this card lives as 1-of-3 columns in the Dashboard's bottom
+           row, so a fixed 3-column button grid squeezed each label/description
+           into ~70-80px, clipping text (e.g. "Emergency"'s description). A
+           single column gives each button the card's full width to wrap. */}
+      <div className="grid grid-cols-1 gap-3">
         {/* Train Bottleneck */}
         <button
           type="button"
           onClick={() => handleTriggerScenario('train-bottleneck')}
           data-testid="scenario-btn-train-bottleneck"
-          className={`py-3 px-4 rounded-xl border flex flex-col gap-2 transition-all cursor-pointer text-left select-none shadow-sm ${
+          className={`py-3 px-4 rounded-xl border flex items-center gap-3 transition-all cursor-pointer text-left select-none shadow-sm min-w-0 ${
             activeScenarioId === 'train-bottleneck'
               ? 'bg-accent/10 border-accent text-accent ring-1 ring-accent'
               : 'bg-canvas border-border text-text-primary hover:bg-canvas/80'
           }`}
         >
-          <Train className="w-5 h-5" />
-          <div>
+          <Train className="w-5 h-5 shrink-0" />
+          <div className="min-w-0">
             <span className="font-bold text-[11px] block">Train Bottleneck</span>
-            <span className="text-[9px] text-text-secondary block leading-tight mt-0.5">Spike train terminal and Gate B</span>
+            <span className="text-[10px] text-text-secondary block leading-snug mt-0.5">Spike train terminal and Gate B</span>
           </div>
         </button>
 
@@ -84,16 +88,16 @@ export function GodMode() {
           type="button"
           onClick={() => handleTriggerScenario('gate-closure')}
           data-testid="scenario-btn-gate-closure"
-          className={`py-3 px-4 rounded-xl border flex flex-col gap-2 transition-all cursor-pointer text-left select-none shadow-sm ${
+          className={`py-3 px-4 rounded-xl border flex items-center gap-3 transition-all cursor-pointer text-left select-none shadow-sm min-w-0 ${
             activeScenarioId === 'gate-closure'
               ? 'bg-accent/10 border-accent text-accent ring-1 ring-accent'
               : 'bg-canvas border-border text-text-primary hover:bg-canvas/80'
           }`}
         >
-          <DoorClosed className="w-5 h-5" />
-          <div>
+          <DoorClosed className="w-5 h-5 shrink-0" />
+          <div className="min-w-0">
             <span className="font-bold text-[11px] block">Gate Closure</span>
-            <span className="text-[9px] text-text-secondary block leading-tight mt-0.5">Close Gate A and congest north stands</span>
+            <span className="text-[10px] text-text-secondary block leading-snug mt-0.5">Close Gate A and congest north stands</span>
           </div>
         </button>
 
@@ -102,16 +106,16 @@ export function GodMode() {
           type="button"
           onClick={() => handleTriggerScenario('emergency')}
           data-testid="scenario-btn-emergency"
-          className={`py-3 px-4 rounded-xl border flex flex-col gap-2 transition-all cursor-pointer text-left select-none shadow-sm ${
+          className={`py-3 px-4 rounded-xl border flex items-center gap-3 transition-all cursor-pointer text-left select-none shadow-sm min-w-0 ${
             activeScenarioId === 'emergency'
               ? 'bg-red-500/10 border-red-500 text-red-700 ring-1 ring-red-500'
               : 'bg-canvas border-border text-text-primary hover:bg-canvas/80'
           }`}
         >
-          <AlertTriangle className="w-5 h-5 text-red-600" />
-          <div>
+          <AlertTriangle className="w-5 h-5 text-red-600 shrink-0" />
+          <div className="min-w-0">
             <span className="font-bold text-[11px] block text-red-700">Emergency</span>
-            <span className="text-[9px] text-text-secondary block leading-tight mt-0.5">Spike east stand and trigger evacuation</span>
+            <span className="text-[10px] text-text-secondary block leading-snug mt-0.5">Spike east stand and trigger evacuation</span>
           </div>
         </button>
       </div>

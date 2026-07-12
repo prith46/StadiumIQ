@@ -113,7 +113,7 @@ describe('Anti-Herding Load-Balancer (M8)', () => {
     });
 
     it('decayed load has zero or reduced routing influence', () => {
-      let routedLoad = { 'gate-a': 8 };
+      let routedLoad: Record<string, number> = { 'gate-a': 8 };
 
       // Apply decay multiple times until it prunes
       for (let i = 0; i < 70; i++) {

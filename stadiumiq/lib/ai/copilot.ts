@@ -1,6 +1,7 @@
 import { createClient, ChatMessage } from './client';
 import { Incident, DensityFrame } from '../types';
 import { findPeakCrush, forecastAt } from '../engine/forecast';
+import { sanitizeUserInput } from './sanitize';
 
 export interface CopilotQueryInput {
   query: string;
@@ -34,12 +35,8 @@ export interface ForecastBrief {
 export async function getCopilotBrief(
   input: CopilotQueryInput
 ): Promise<CopilotBrief | { error: string }> {
-  // 1. Injection Defense: Sanitize user query
-  const sanitizedQuery = input.query
-    .replace(/<user_message>/gi, '[filtered]')
-    .replace(/<\/user_message>/gi, '[filtered]')
-    .replace(/<user_query>/gi, '[filtered]')
-    .replace(/<\/user_query>/gi, '[filtered]');
+  // 1. Injection Defense: Sanitize user query against all prompt-block delimiters
+  const sanitizedQuery = sanitizeUserInput(input.query);
 
   // 2. Token-Efficiency: Summarize incidents and high-density zones
   const activeIncidents = input.incidents
@@ -147,12 +144,23 @@ export async function getForecastBrief(
     '2. "staffingRecommendation" (string): Operational recommendation for crew allocation based strictly on these hot zones.\n' +
     'Do not wrap the JSON output in markdown formatting. Return raw JSON.';
 
+  // Fix 8: when there's genuinely no significant predicted hotspot, tell the
+  // LLM that explicitly via the grounding data instead of handing it an empty
+  // array and a prompt that still says "explain which zones are affected" —
+  // that contradiction is what produced "highest density areas will include:"
+  // with nothing after it.
+  const noSignificantForecast = topZones.length === 0 && hotZonesAtForecast.length === 0;
+
   const userPrompt =
     `<forecast_calculations>\n` +
     `Current Time: ${input.matchClockSec}s\n` +
     `Predicted Peak Time: ${peakAtSec}s (${Math.round((peakAtSec - input.matchClockSec) / 60)} minutes from now)\n` +
     `Peak Top High-Density Zones: ${JSON.stringify(topZones)}\n` +
     `Densities at +15 mins lookahead: ${JSON.stringify(hotZonesAtForecast)}\n` +
+    `noSignificantForecast: ${noSignificantForecast}\n` +
+    (noSignificantForecast
+      ? `Note: there is no significant predicted hotspot in this window — say so plainly, don't describe hot zones that don't exist.\n`
+      : '') +
     `</forecast_calculations>`;
 
   const messages: ChatMessage[] = [
@@ -182,17 +190,25 @@ export async function getForecastBrief(
     };
   } catch (err: any) {
     // Resilient fallback forecast brief
+    // Fix 7: `secs % 60` on a non-integer `peakAtSec` (e.g. an interpolated
+    // timeline timestamp) produced raw floats like "01:0.9990000000000023" —
+    // both the minutes and seconds components must be floored.
     const formatTime = (secs: number) => {
-      const m = Math.floor(secs / 60);
-      const s = secs % 60;
+      const wholeSecs = Math.floor(secs);
+      const m = Math.floor(wholeSecs / 60);
+      const s = wholeSecs % 60;
       return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
     };
 
     return {
       peakAtSec,
       topZones,
-      narrative: `Deterministic peak density is predicted at match clock ${formatTime(peakAtSec)}. Highest density areas will include: ${topZones.map((z) => `${z.zoneId} (${Math.round(z.density * 100)}%)`).join(', ')}.`,
-      staffingRecommendation: 'Deploy standby dispatch teams and open alternative routes near congestion zones.',
+      narrative: noSignificantForecast
+        ? `No significant hotspots predicted in the next 15 minutes — crowd density remains within normal operating range through match clock ${formatTime(peakAtSec)}.`
+        : `Deterministic peak density is predicted at match clock ${formatTime(peakAtSec)}. Highest density areas will include: ${topZones.map((z) => `${z.zoneId} (${Math.round(z.density * 100)}%)`).join(', ')}.`,
+      staffingRecommendation: noSignificantForecast
+        ? 'No elevated staffing action required at this time — maintain standard coverage.'
+        : 'Deploy standby dispatch teams and open alternative routes near congestion zones.',
     };
   }
 }

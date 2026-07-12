@@ -31,8 +31,14 @@ export const useIncentiveStore = create<IncentiveStore>((set, get) => ({
       return;
     }
 
-    // ID is derived uniquely from source zone and expiresAt simulation timestamp
-    const id = `incentive-${incentiveData.fromZone}-${incentiveData.expiresAt}`;
+    // Stable per-minute ID (M9 §5): derived from fromZone/toZone and the
+    // matchClockSec minute bucket, NOT expiresAt. expiresAt drifts by 1 sim
+    // second on every tick (expiresAt = matchClockSec + 300), so keying off it
+    // minted a "new" id on every single tick the bottleneck persisted — the
+    // cooldown check below still worked, but the id was never stable, which
+    // defeated any caller (or future svc) that dedupes by id membership rather
+    // than by re-invoking offerIncentive.
+    const id = `incentive-${incentiveData.fromZone}-${incentiveData.toZone}-${Math.floor(matchClockSec / 60)}`;
 
     if (dismissedIncentiveIds.includes(id)) {
       return;

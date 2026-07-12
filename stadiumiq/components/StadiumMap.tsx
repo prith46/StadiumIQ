@@ -22,11 +22,20 @@ import {
   routeDrawTransition,
   EXIT_FADE_MS,
 } from "@/lib/venue/overlayAnimations";
+import { EDGES } from "@/lib/venue/venue";
+import { computeFlowVectors, FlowVector } from "@/lib/engine/flowVectors";
+import { FlowVectorOverlay } from "@/components/FlowVectorOverlay";
+import { CrowdAgentLayer } from "@/components/CrowdAgentLayer";
 
 export interface StadiumMapHandle {
   highlightZone: (zoneId: string, opts?: { pulse?: boolean }) => void;
-  /** M5: returns a Promise that resolves when the path-draw animation completes. */
-  drawRoute: (path: string[]) => Promise<void>;
+  /**
+   * M5: returns a Promise that resolves when the path-draw animation completes.
+   * `variant` defaults to `'default'` (FIFA-blue). M14 SOS overlay passes
+   * `'emergency'` to render the documented crimson evacuation path (§m14-sos.md
+   * "Evacuation path color: #ef4444") instead of the standard route color.
+   */
+  drawRoute: (path: string[], variant?: 'default' | 'emergency') => Promise<void>;
   dropPin: (zoneId: string, kind: 'incident' | 'dispatch' | 'poi') => void;
   clearOverlay: () => void;
 }
@@ -109,7 +118,7 @@ const SectionShapeComponent: React.FC<SectionShapeProps> = ({
 }) => {
   const isPending = density === undefined;
   const band = isPending ? null : densityToBand(density);
-  const fillColor = isPending ? "#E5E7EB" : band!.fill;
+  const fillColor = isPending ? "var(--color-border)" : band!.fill;
   const strokeColor = isPending ? "rgba(0,0,0,0.06)" : band!.stroke;
 
   return (
@@ -158,11 +167,40 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
 
     // 1. Reactive subscription to simulation density and gateStatus
     const density = useSimStore((s) => s.density);
+    const previousDensity = useSimStore((s) => s.previousDensity);
     const gateStatus = useSimStore((s) => s.gateStatus);
+    const sensorCounts = useSimStore((s) => s.sensorCounts);
+
+    // M28: cosmetic crowd-agent visualization — opt-in, OFF by default given perf risk.
+    const showCrowdAgents = useSimStore((s) => s.showCrowdAgents);
+
+    // M22: raw per-tick flow vectors, then retained for 2 ticks after dropping
+    // below FLOW_THRESHOLD so arrows fade instead of flickering off instantly.
+    const rawFlowVectors = useMemo(
+      () => computeFlowVectors(density, previousDensity, EDGES),
+      [density, previousDensity]
+    );
+    const flowFadeMapRef = useRef<Map<string, { vector: FlowVector; ticksLeft: number }>>(new Map());
+    const [flowVectors, setFlowVectors] = useState<FlowVector[]>([]);
+    useEffect(() => {
+      const map = flowFadeMapRef.current;
+      const rawIds = new Set(rawFlowVectors.map((v) => v.edgeId));
+      for (const v of rawFlowVectors) {
+        map.set(v.edgeId, { vector: v, ticksLeft: 2 });
+      }
+      for (const [id, entry] of map) {
+        if (!rawIds.has(id)) {
+          entry.ticksLeft -= 1;
+          if (entry.ticksLeft <= 0) map.delete(id);
+        }
+      }
+      setFlowVectors(Array.from(map.values()).map((e) => e.vector));
+    }, [rawFlowVectors]);
 
     // 2. Internal overlay states managed imperatively via ref
     const [highlightedZone, setHighlightedZone] = useState<{ zoneId: string; pulse?: boolean } | null>(null);
     const [route, setRoute] = useState<string[] | null>(null);
+    const [routeVariant, setRouteVariant] = useState<'default' | 'emergency'>('default');
     const [routeDrawDone, setRouteDrawDone] = useState(false);
     const [pins, setPins] = useState<Array<{ zoneId: string; kind: 'incident' | 'dispatch' | 'poi' }>>([]);
 
@@ -173,6 +211,7 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
     const [exitingSnapshot, setExitingSnapshot] = useState<{
       highlightedZone: typeof highlightedZone;
       route: typeof route;
+      routeVariant: typeof routeVariant;
       pins: typeof pins;
     } | null>(null);
     const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -194,6 +233,22 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
 
 
 
+    const handleClearOverlay = () => {
+      // Capture outgoing snapshot for cosmetic exit-fade (decorative only)
+      const fadeDuration = prefersReducedMotion.current ? 0 : EXIT_FADE_MS;
+      setExitingSnapshot({ highlightedZone, route, routeVariant, pins });
+      if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
+      exitTimerRef.current = setTimeout(() => setExitingSnapshot(null), fadeDuration);
+
+      // PRIMARY clear — synchronous, test-stable (never flaky)
+      setHighlightedZone(null);
+      setRoute(null);
+      setRouteVariant('default');
+      setRouteDrawDone(false);
+      setPins([]);
+      routeResolverRef.current = null;
+    };
+
     // 3. Expose imperative ref methods
     useImperativeHandle(ref, () => ({
       highlightZone: (zoneId, opts) => {
@@ -203,13 +258,14 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
         }
         setHighlightedZone({ zoneId, pulse: opts?.pulse });
       },
-      drawRoute: (path) => {
+      drawRoute: (path, variant = 'default') => {
         const invalidIds = path.filter((id) => !ZONES.some((z) => z.id === id));
         if (invalidIds.length > 0) {
           console.warn(`[StadiumMap] drawRoute called with invalid zoneId(s): ${JSON.stringify(invalidIds)}`);
           return Promise.resolve();
         }
         setRoute(path);
+        setRouteVariant(variant);
         setRouteDrawDone(false);
         return new Promise<void>((resolve) => {
           routeResolverRef.current = resolve;
@@ -231,20 +287,7 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
           return [...filtered, { zoneId, kind }];
         });
       },
-      clearOverlay: () => {
-        // Capture outgoing snapshot for cosmetic exit-fade (decorative only)
-        const fadeDuration = prefersReducedMotion.current ? 0 : EXIT_FADE_MS;
-        setExitingSnapshot({ highlightedZone, route, pins });
-        if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
-        exitTimerRef.current = setTimeout(() => setExitingSnapshot(null), fadeDuration);
-
-        // PRIMARY clear — synchronous, test-stable (never flaky)
-        setHighlightedZone(null);
-        setRoute(null);
-        setRouteDrawDone(false);
-        setPins([]);
-        routeResolverRef.current = null;
-      }
+      clearOverlay: handleClearOverlay
     }));
 
     // 4. Memoize the section coordinates and SVG paths (static, only computed once)
@@ -351,16 +394,16 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
             positioned via pctPos() percentages calibrated against the SVG's
             680x396 viewBox. It must be sized/positioned identically to the
             SVG's own rendered box — not the outer flex container, which can
-            be wider than the max-w-[650px]-capped, centered SVG. Without this
+            be wider than the max-w-[900px]-capped, centered SVG. Without this
             wrapper, `inset:0` on the overlay stretches it to the outer
             container's full width, shifting and rescaling every icon.
           */}
-          <div className="relative w-full max-w-[650px]" style={{ aspectRatio: `${VIEW_W} / ${VIEW_H}` }}>
+          <div className="relative w-full max-w-[900px]" style={{ aspectRatio: `${VIEW_W} / ${VIEW_H}` }}>
           {/* SVG rendering the Stadium Digital Twin — light mode only, §22 REQ 4 */}
           <svg
             viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
             className="w-full h-auto drop-shadow-sm"
-            style={{ backgroundColor: "#FAFAFA" }}
+            style={{ backgroundColor: "var(--color-canvas)" }}
             role="img"
             aria-label="Stadium Interactive Seating and Heatmap Map"
           >
@@ -375,7 +418,19 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
                 markerHeight="6"
                 orient="auto-start-reverse"
               >
-                <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563EB" />
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--color-accent)" />
+              </marker>
+              {/* M14: crimson variant for the SOS evacuation path (§m14-sos.md §2) */}
+              <marker
+                id="route-arrow-emergency"
+                viewBox="0 0 10 10"
+                refX="5"
+                refY="5"
+                markerWidth="6"
+                markerHeight="6"
+                orient="auto-start-reverse"
+              >
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#ef4444" />
               </marker>
             </defs>
 
@@ -399,9 +454,10 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
                 const percentStr = dVal !== undefined ? `${Math.round(dVal * 100)}%` : "N/A";
                 const decimalStr = dVal !== undefined ? dVal.toFixed(2) : "N/A";
                 const status = getStatusText(dVal);
+                const sensorCountVal = sensorCounts?.[pathObj.id] ?? 0;
                 const labelText = `Section ${pathObj.zone.label}, Tier ${pathObj.zone.tier}, status: ${status}${
                   mode === "organizer" && dVal !== undefined ? `, density: ${percentStr}` : ""
-                }`;
+                }${mode === "organizer" ? `, active sessions: ${sensorCountVal}` : ""}`;
 
                 return (
                   <Tooltip key={pathObj.id}>
@@ -423,7 +479,7 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
                         <span
                           className="w-2.5 h-2.5 rounded-full"
                           style={{
-                            backgroundColor: dVal === undefined ? "#E5E7EB" : densityToBand(dVal).stroke
+                            backgroundColor: dVal === undefined ? "var(--color-border)" : densityToBand(dVal).stroke
                           }}
                         />
                         <span className="font-medium text-gray-700">
@@ -435,6 +491,18 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
                           <span>Density:</span>
                           <span className="font-semibold text-gray-900 bg-gray-100 px-1.5 py-0.5 rounded text-[10px]">
                             {percentStr} ({decimalStr})
+                          </span>
+                        </div>
+                      )}
+                      {/* Fix 4: fan-as-sensor active session count, organizer-only, same tooltip pattern as density */}
+                      {mode === "organizer" && (
+                        <div className="flex items-center justify-between gap-4 text-gray-500">
+                          <span>Active sessions:</span>
+                          <span
+                            className="font-semibold text-gray-900 bg-gray-100 px-1.5 py-0.5 rounded text-[10px]"
+                            data-testid={`sensor-count-${pathObj.id}`}
+                          >
+                            {sensorCounts?.[pathObj.id] ?? 0}
                           </span>
                         </div>
                       )}
@@ -513,7 +581,7 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
                           role="button"
                           aria-label={`${gate.label}, status: ${status}`}
                         >
-                          <rect x={-25} y={-9} width={50} height={18} rx={5} fill="#2563EB" />
+                          <rect x={-25} y={-9} width={50} height={18} rx={5} fill="var(--color-accent)" />
                           <text
                             x="0"
                             y="4"
@@ -582,6 +650,12 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
               })}
             </g>
 
+            {/* M22: Crowd flow vectors — sits above the heatmap, below highlights/routes/pins */}
+            <FlowVectorOverlay flowVectors={flowVectors} zones={ZONES} />
+
+            {/* M28: cosmetic crowd-agent visualization — opt-in demo layer */}
+            <CrowdAgentLayer enabled={showCrowdAgents} density={density} />
+
             {/* 7. SVG OVERLAY LAYER (route, you-are-here, highlight, pins) — §22.8 */}
             <g id="overlay-layer">
 
@@ -597,65 +671,72 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
                       .filter((p): p is { x: number; y: number } => p !== null);
                     if (pts.length < 2) return null;
                     const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+                    const exitingColor = exitingSnapshot.routeVariant === 'emergency' ? '#ef4444' : 'var(--color-accent)';
                     return (
-                      <path d={d} fill="none" stroke="#2563EB" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="7,5" style={{ pointerEvents: 'none' }} />
+                      <path d={d} fill="none" stroke={exitingColor} strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="7,5" style={{ pointerEvents: 'none' }} />
                     );
                   })()}
                 </g>
               )}
 
               {/* Route line — M5: motion.path with pathLength draw animation, §22.8 */}
-              {routePathD && (
-                <g id="route-overlay">
-                  {/* Shadow stroke (static, instant) */}
-                  <path
-                    d={routePathD}
-                    fill="none"
-                    stroke="rgba(37, 99, 235, 0.2)"
-                    strokeWidth="6"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    style={{ pointerEvents: 'none' }}
-                  />
-                  {/* Animated draw stroke */}
-                  <motion.path
-                    d={routePathD}
-                    fill="none"
-                    stroke="#2563EB"
-                    strokeWidth="3.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeDasharray="7,5"
-                    markerEnd="url(#route-arrow)"
-                    style={{ pathLength: 0 }}
-                    initial={{ pathLength: 0, opacity: 0 }}
-                    animate={{ pathLength: 1, opacity: 1 }}
-                    transition={routeDrawTransition(route ? route.length - 1 : 1)}
-                    onAnimationComplete={() => {
-                      setRouteDrawDone(true);
-                      if (routeResolverRef.current) {
-                        routeResolverRef.current();
-                        routeResolverRef.current = null;
-                      }
-                    }}
-                  />
-                  {/* Arrow marker at destination — mounts only after draw completes */}
-                  {routeDrawDone && routeDestPoint && (
-                    <motion.circle
-                      cx={routeDestPoint.x}
-                      cy={routeDestPoint.y}
-                      r={5}
-                      fill="#2563EB"
-                      stroke="white"
-                      strokeWidth="2"
-                      initial={{ scale: 0, opacity: 0 }}
-                      animate={{ scale: 1, opacity: 1 }}
-                      transition={{ duration: 0.2, ease: 'easeOut' }}
+              {routePathD && (() => {
+                const isEmergency = routeVariant === 'emergency';
+                const routeColor = isEmergency ? '#ef4444' : 'var(--color-accent)';
+                const routeShadowColor = isEmergency ? 'rgba(239, 68, 68, 0.2)' : 'rgba(37, 99, 235, 0.2)';
+                const routeMarker = isEmergency ? 'url(#route-arrow-emergency)' : 'url(#route-arrow)';
+                return (
+                  <g id="route-overlay">
+                    {/* Shadow stroke (static, instant) */}
+                    <path
+                      d={routePathD}
+                      fill="none"
+                      stroke={routeShadowColor}
+                      strokeWidth="6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
                       style={{ pointerEvents: 'none' }}
                     />
-                  )}
-                </g>
-              )}
+                    {/* Animated draw stroke */}
+                    <motion.path
+                      d={routePathD}
+                      fill="none"
+                      stroke={routeColor}
+                      strokeWidth="3.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeDasharray="7,5"
+                      markerEnd={routeMarker}
+                      style={{ pathLength: 0 }}
+                      initial={{ pathLength: 0, opacity: 0 }}
+                      animate={{ pathLength: 1, opacity: 1 }}
+                      transition={routeDrawTransition(route ? route.length - 1 : 1)}
+                      onAnimationComplete={() => {
+                        setRouteDrawDone(true);
+                        if (routeResolverRef.current) {
+                          routeResolverRef.current();
+                          routeResolverRef.current = null;
+                        }
+                      }}
+                    />
+                    {/* Arrow marker at destination — mounts only after draw completes */}
+                    {routeDrawDone && routeDestPoint && (
+                      <motion.circle
+                        cx={routeDestPoint.x}
+                        cy={routeDestPoint.y}
+                        r={5}
+                        fill={routeColor}
+                        stroke="white"
+                        strokeWidth="2"
+                        initial={{ scale: 0, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        transition={{ duration: 0.2, ease: 'easeOut' }}
+                        style={{ pointerEvents: 'none' }}
+                      />
+                    )}
+                  </g>
+                );
+              })()}
 
               {/* Highlighting — M5: motion.path/circle with scale-pulse entrance */}
               {(() => {
@@ -671,7 +752,7 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
                         key={`highlight-${highlightedZone.zoneId}`}
                         d={pathObj.d}
                         fill="rgba(37,99,235,0.08)"
-                        stroke="#2563EB"
+                        stroke="var(--color-accent)"
                         strokeWidth="2.5"
                         className={highlightedZone.pulse ? "animate-pulse" : ""}
                         style={{ pointerEvents: "none" }}
@@ -690,7 +771,7 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
                       cy={p.y}
                       r={14}
                       fill="none"
-                      stroke="#2563EB"
+                      stroke="var(--color-accent)"
                       strokeWidth="2.5"
                       className={highlightedZone.pulse ? "animate-pulse" : ""}
                       style={{ pointerEvents: "none" }}
@@ -708,7 +789,7 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
                 const zoneObj = ZONES.find((z) => z.id === pin.zoneId);
                 if (!zoneObj) return null;
                 const p = getZoneCenter(zoneObj);
-                const pinColor = pin.kind === "incident" ? "#EF4444" : pin.kind === "dispatch" ? "#2563EB" : "#94A3B8";
+                const pinColor = pin.kind === "incident" ? "var(--color-danger)" : pin.kind === "dispatch" ? "var(--color-accent)" : "var(--color-text-secondary)";
 
                 return (
                   <motion.g
@@ -736,6 +817,7 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
                 const zone = ZONES.find((z) => z.id === currentZoneId);
                 if (!zone) return null;
                 const p = getZoneCenter(zone);
+                const zoneSensorCount = sensorCounts[currentZoneId] ?? 0;
                 return (
                   <g id="you-are-here-marker" style={{ pointerEvents: "none" }}>
                     <circle
@@ -743,7 +825,7 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
                       cy={p.y}
                       r="8.5"
                       fill="none"
-                      stroke="#2563EB"
+                      stroke="var(--color-danger)"
                       strokeWidth="2"
                       className="pulsing-ring"
                     />
@@ -751,10 +833,30 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
                       cx={p.x}
                       cy={p.y}
                       r="3"
-                      fill="#2563EB"
+                      fill="var(--color-danger)"
                       stroke="white"
                       strokeWidth="1.5"
                     />
+                    {/* Unobtrusive sensorCounts readout for the fan-as-sensor mechanic */}
+                    <g transform={`translate(${p.x + 10}, ${p.y - 14})`}>
+                      <rect
+                        width={12 + String(zoneSensorCount).length * 5}
+                        height="10"
+                        rx="3"
+                        fill="rgba(17,24,39,0.75)"
+                      />
+                      <text
+                        x={6 + String(zoneSensorCount).length * 2.5}
+                        y="7.5"
+                        textAnchor="middle"
+                        fontSize="7"
+                        fontWeight="700"
+                        fill="white"
+                        aria-label={`Sensor count for your zone: ${zoneSensorCount}`}
+                      >
+                        {zoneSensorCount}
+                      </text>
+                    </g>
                   </g>
                 );
               })()}
@@ -814,6 +916,25 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
               );
             })}
           </div>
+
+
+
+          {/* Clear Map button overlay */}
+          {(route || highlightedZone) && (
+            <div className="absolute top-2 right-2 z-50 pointer-events-auto">
+              <button
+                onClick={handleClearOverlay}
+                className="bg-white/90 backdrop-blur-sm text-xs font-medium px-3 py-1.5 rounded-full shadow border border-border text-text hover:bg-canvas transition-colors flex items-center gap-1.5"
+                aria-label="Clear map overlay"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+                Clear Map
+              </button>
+            </div>
+          )}
           </div>
 
           {/* ACCESSIBILITY (A11Y) SCREEN-READER FALLBACK LIST */}

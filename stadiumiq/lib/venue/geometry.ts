@@ -64,6 +64,7 @@ export interface HeatBand {
  * else      -> crowded (red)
  */
 export function densityToBand(density: number): HeatBand {
+  if (density < 0.05) return { fill: '#F1F1EF', stroke: '#D1D1CF' };
   if (density < 0.34) return { fill: '#C0DD97', stroke: '#639922' };
   if (density < 0.67) return { fill: '#FAC775', stroke: '#BA7517' };
   return { fill: '#F09595', stroke: '#A32D2D' };

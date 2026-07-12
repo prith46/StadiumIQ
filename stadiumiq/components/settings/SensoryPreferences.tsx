@@ -26,10 +26,13 @@ export function SensoryPreferences() {
   const openAir = sensory?.openAir ?? false;
   const avoidAffiliation = sensory?.avoidAffiliation;
 
+  // Soft routing penalties have no visual effect on their own — state plainly
+  // what they do to routes so the fan can tell the toggle is actually doing
+  // something the next time they ask for directions (M10, item 5c).
   const activeLabels = [
-    quiet && "Quiet mode: on",
-    openAir && "Open-air: on",
-    avoidAffiliation && `Avoiding ${avoidAffiliation === "home" ? "Home" : "Away"} section`,
+    quiet && "Quiet: avoiding noisy areas in your routes",
+    openAir && "Open-air: avoiding enclosed passages in your routes",
+    avoidAffiliation && `Avoiding ${avoidAffiliation === "home" ? "Home" : "Away"} section in your routes`,
   ].filter(Boolean) as string[];
 
   return (

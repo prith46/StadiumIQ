@@ -1,5 +1,6 @@
 import type { Alert, FanContext, Zone, Poi } from '../types';
 import { ZONES, POIS } from '../venue/venue';
+import { MATCH_END_ALERT_LEAD_SEC } from '../simulation/matchSequencer';
 
 export interface TriageInput {
   matchClockSec: number;
@@ -7,6 +8,9 @@ export interface TriageInput {
   gateStatus: Record<string, 'open' | 'congested' | 'closed'>;
   fanContext: FanContext;
   alreadyFired: Record<string, number>; // triggerKey -> matchClockSec last fired
+  // M29 (additive): seconds remaining until the auto-sequencer's live phase
+  // ends, when known. Undefined when the sequencer isn't running/live.
+  secondsUntilPhaseEnd?: number;
 }
 
 // Pure type definitions matching M3 routing contract (to avoid importing the module directly)
@@ -15,7 +19,7 @@ export type RouteResult = {
   etaSec: number;
   reason: {
     crowdedZones: string[];
-    avoidedGates: string[];
+    avoidedGates: Array<{ gateId: string; cause: 'congested' | 'closed' }>;
     etaSec: number;
   };
   accessible: boolean;
@@ -65,6 +69,26 @@ export function evaluateTriggers(
   if (!location) return [];
 
   const alerts: Array<{ triggerKey: string; alert: Omit<Alert, 'id' | 'createdAt'> }> = [];
+
+  // -------------------------------------------------------------------------
+  // Rule 0 (M29, additive): auto-sequencer live phase ending soon
+  // -------------------------------------------------------------------------
+  if (
+    typeof input.secondsUntilPhaseEnd === 'number' &&
+    input.secondsUntilPhaseEnd >= 0 &&
+    input.secondsUntilPhaseEnd <= MATCH_END_ALERT_LEAD_SEC
+  ) {
+    alerts.push({
+      triggerKey: 'phase-ending-soon',
+      alert: {
+        kind: 'proactive',
+        priority: 2,
+        title: 'Match Wrapping Up',
+        body: `The live match window ends in about ${Math.max(0, Math.round(input.secondsUntilPhaseEnd))}s — egress will begin shortly.`,
+        action: 'Plan your exit',
+      },
+    });
+  }
 
   // -------------------------------------------------------------------------
   // Rule 1: Pre-emptive exit nudge

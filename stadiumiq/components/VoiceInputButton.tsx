@@ -60,6 +60,13 @@ export function VoiceInputButton({ onTranscript, disabled = false }: VoiceInputB
         locale,
         (result) => {
           onTranscript(result.transcript);
+          // Once a transcript is finalized, stop listening instead of
+          // leaving the mic open indefinitely (recognition.continuous=true
+          // would otherwise keep it running until manually toggled off).
+          if (result.isFinal) {
+            recognizerRef.current?.stop();
+            setIsListening(false);
+          }
         },
         (error) => {
           console.error("[VoiceInputButton] Error:", error);

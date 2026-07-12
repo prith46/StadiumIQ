@@ -11,6 +11,25 @@
  *   - dispatchMapActions is now async. Call sites use fire-and-forget (no await).
  */
 
+import { ZONES } from '../venue/venue';
+
+/**
+ * Fix 7: the LLM's final-turn `mapActions` JSON schema (in `lib/ai/client.ts`)
+ * doesn't constrain `zoneId`'s format the way the tool-calling schema in
+ * `lib/ai/tools.ts` does (which explicitly documents "sections (sec-101)").
+ * A bare id like "205" would silently no-op at `StadiumMap`'s
+ * `ZONES.some(z => z.id === zoneId)` check. Normalize at this dispatch
+ * boundary instead: accept either the correct prefixed id or a bare section
+ * number and resolve to the real `Zone.id`, so a format slip from the LLM
+ * doesn't silently drop the action.
+ */
+function normalizeZoneId(zoneId: string): string {
+  if (ZONES.some((z) => z.id === zoneId)) return zoneId;
+  const prefixed = `sec-${zoneId}`;
+  if (ZONES.some((z) => z.id === prefixed)) return prefixed;
+  return zoneId;
+}
+
 export interface MapAction {
   op: 'highlight' | 'route' | 'pin';
   zoneId?: string;
@@ -65,10 +84,11 @@ export async function dispatchMapActions(
       Array.isArray(cur.path) &&
       cur.path.length > 0 &&
       next.op === 'pin' &&
-      next.zoneId === cur.path[cur.path.length - 1]
+      next.zoneId &&
+      normalizeZoneId(next.zoneId) === normalizeZoneId(cur.path[cur.path.length - 1])
     ) {
       routeActionIdx = i;
-      routeTerminalZone = cur.path[cur.path.length - 1];
+      routeTerminalZone = normalizeZoneId(cur.path[cur.path.length - 1]);
       break;
     }
   }
@@ -81,13 +101,13 @@ export async function dispatchMapActions(
     try {
       if (action.op === 'highlight') {
         if (action.zoneId) {
-          handle.highlightZone(action.zoneId);
+          handle.highlightZone(normalizeZoneId(action.zoneId));
         } else {
           console.warn('[mapActionDispatcher] Highlight op ignored: missing zoneId');
         }
       } else if (action.op === 'route') {
         if (Array.isArray(action.path) && action.path.length > 0) {
-          const promise = handle.drawRoute(action.path);
+          const promise = handle.drawRoute(action.path.map(normalizeZoneId));
           if (i === routeActionIdx) {
             // Store the promise so the following destination-pin can await it
             pendingRoutePromise = promise;
@@ -98,15 +118,16 @@ export async function dispatchMapActions(
       } else if (action.op === 'pin') {
         const kind = action.kind ?? 'incident';
         if (action.zoneId) {
+          const normalizedZoneId = normalizeZoneId(action.zoneId);
           // If this is the destination pin following the sequenced route, await first
           if (
             pendingRoutePromise !== null &&
-            action.zoneId === routeTerminalZone
+            normalizedZoneId === routeTerminalZone
           ) {
             await pendingRoutePromise;
             pendingRoutePromise = null;
           }
-          handle.dropPin(action.zoneId, kind);
+          handle.dropPin(normalizedZoneId, kind);
         } else {
           console.warn('[mapActionDispatcher] Pin op ignored: missing zoneId');
         }

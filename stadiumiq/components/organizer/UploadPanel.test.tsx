@@ -19,6 +19,25 @@ describe('UploadPanel React Component', () => {
     expect(screen.getByRole('button', { name: /Reset Baseline/i })).toBeInTheDocument();
   });
 
+  it('renders the paste textarea and sample JSON block at a legible font size, not the previous tiny 9-10px (M16 item 13)', () => {
+    render(<UploadPanel />);
+
+    const textarea = screen.getByTestId('upload-textarea');
+    expect(textarea.className).not.toMatch(/text-\[(9|10)px\]/);
+    expect(textarea.className).toContain('text-sm');
+
+    const toggleBtn = screen.getByTestId('view-sample-format-toggle');
+    act(() => {
+      fireEvent.click(toggleBtn);
+    });
+
+    const sampleBlock = screen.getByTestId('sample-format-block');
+    const pre = sampleBlock.querySelector('pre');
+    expect(pre).not.toBeNull();
+    expect(pre!.className).not.toMatch(/text-\[(9|10)px\]/);
+    expect(pre!.className).toContain('text-sm');
+  });
+
   it('toggles the view of the sample format block', () => {
     render(<UploadPanel />);
 

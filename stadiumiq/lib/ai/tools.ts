@@ -7,6 +7,7 @@ import { retrieve } from './rag';
 import { getForecast, getPeakCrush, ForecastSource } from '../engine/forecast';
 import { computeBaseDensity } from '../simulation/engine';
 import { detectStressHeuristic } from './stressDetection';
+import { useIncentiveStore } from '../store/incentiveStore';
 
 export class UnknownToolError extends Error {
   constructor(message: string) {
@@ -41,6 +42,10 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
         'Accepts a destination zone id, a POI type (e.g. "restroom"), or "nearestExit". ' +
         'Returns path (ordered zone ids), etaSec, and a reason object naming any congested ' +
         'zones/gates that were avoided so the LLM can phrase the explanation accurately. ' +
+        'avoidedGates is an array of objects: { gateId: string, cause: "congested" | "closed" }. ' +
+        'IMPORTANT: whenever avoidedGates is non-empty, your reply MUST explain WHY this route/exit ' +
+        'was chosen by explicitly naming those gates and their cause — e.g. "Gates A, C and D are ' +
+        'closed, so I\'ve routed you to Gate B." Never omit closed/congested gate reasons from the message. ' +
         'Infer sensory filters from natural phrasing for a ONE-TIME request: "claustrophobic" ' +
         'or "keep me in open air" -> avoidEnclosed: true; "quietest way"/"sleeping toddler" -> ' +
         'maxNoise: "low"; "I\'m an away fan"/"avoid the home section" -> avoidAffiliation set to ' +
@@ -70,7 +75,7 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
                 type: 'string',
                 enum: ['zone', 'poiType', 'nearestExit'],
               },
-              zoneId: { type: 'string', description: 'Zone id (when kind=zone)' },
+              zoneId: { type: 'string', description: 'Zone id (when kind=zone), including transit nodes (transit-taxi, transit-bus, transit-train, transit-parking), gates (gate-a), and sections (sec-101)' },
               poiType: {
                 type: 'string',
                 description: 'POI type (when kind=poiType), e.g. restroom, food, first_aid',
@@ -434,7 +439,19 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
       },
     },
     execute: (args) => {
-      // TODO(M9): Replace with dynamic detouring incentives registry lookup.
+      const active = useIncentiveStore.getState().activeIncentives.find(
+        (inc) => inc.fromZone === args.fromZoneId
+      );
+      if (active) {
+        return {
+          id: active.id,
+          fromZone: active.fromZone,
+          toZone: active.toZone,
+          reward: active.reward,
+          qrPayload: active.qrPayload,
+          expiresAt: active.expiresAt,
+        };
+      }
       return {
         id: '',
         fromZone: args.fromZoneId ?? '',
@@ -462,6 +479,46 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
     execute: async (args) => {
       return await retrieve(args.query || '');
     },
+  },
+
+  reportIncident: {
+    schema: {
+      name: 'reportIncident',
+      description: 'Reports an issue or incident to the stadium organizers on behalf of the fan.',
+      parameters: {
+        type: 'object',
+        properties: {
+          type: { type: 'string', enum: ['crowd', 'medical', 'assistance', 'security'], description: 'The type of incident' },
+          note: { type: 'string', description: 'Description of the issue' }
+        },
+        required: ['type', 'note']
+      }
+    },
+    execute: (args, ctx) => {
+      const type = args.type as 'crowd' | 'medical' | 'assistance' | 'security';
+      const note = args.note as string;
+      const fanLocation = ctx.fanContext?.location;
+      
+      if (!fanLocation) return { error: 'Unknown fan location. Could not report incident.' };
+      
+      try {
+        const { useSimStore } = require('../store/simStore');
+        const state = useSimStore.getState();
+        const newIncident = {
+          id: `ai-${Date.now()}`,
+          type,
+          zoneId: fanLocation,
+          note,
+          status: 'pending',
+          createdAt: state.matchClockSec
+        } as const;
+        
+        state.applyScenario({ incidents: [...state.incidents, newIncident] });
+        return { success: true, message: `Successfully reported ${type} issue to the organizers.` };
+      } catch (err) {
+        return { error: 'Failed to report incident to the store' };
+      }
+    }
   },
 };
 

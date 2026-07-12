@@ -27,30 +27,66 @@ describe('Anti-Herding Load Balance Simulator', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // 2. Core Quantitative Proof (Realistic Scenario on Venue Graph)
+  // 2. Core Quantitative Proof (Real Venue Graph — Boundary-Section Anti-Herding)
   // ---------------------------------------------------------------------------
 
-  // MAP BUILD SPEC §22.7: concourse nodes are now one-per-section on a SINGLE
-  // 60-node ring (not 4 separate per-tier rings of 4 stand-concourses each).
-  // Going "the long way" around a 60-node ring to reach a different gate now
-  // costs hundreds of seconds — far more than any congestion penalty a single
-  // gate can accumulate — so from any ONE origin, 100% of naive AND balanced
-  // requests herd to that origin's one nearest gate (verified empirically:
-  // every single-section origin tested produces a 20/0/0/0 split with
-  // improvementRatio === 1, regardless of load). That specific "spread load
-  // away from one congested gate for one origin" scenario is no longer
-  // physically possible in this topology — there is no comparably-priced
-  // alternate gate to spill onto. This is a real, spec-driven capability
-  // change, not a bug (§22.7 gives no tier-crossing or cross-quadrant
-  // shortcuts). The mechanism itself is still proven correct against graphs
-  // that DO offer close alternatives — see the mock-graph tests below, which
-  // are unaffected by this topology change and still pass.
+  // sec-309 sits at 37.5° — the boundary section between gate-b (0°) and
+  // gate-c (90°) on the 60-node concourse ring. Hop counts (verified by
+  // sorting all 60 concourse nodes by angle 0°-360°):
   //
-  // What IS still true and worth proving on the real venue: gate/exit
-  // diversity now emerges naturally from *where fans start*, not from
-  // load-feedback rerouting. A representative crowd (spread across all four
-  // quadrants) produces a naturally balanced, low-Gini gate distribution —
-  // each quadrant's fans go to their own nearest gate.
+  //   gate-b connects to con-sec-306 (352.5°): ring index 59 (0-indexed)
+  //   gate-c connects to con-sec-312 (82.5°):  ring index 14
+  //   sec-309 (37.5°) is at ring index 6
+  //
+  // Path cost from sec-309 to each gate:
+  //   To gate-b:  sec-309→con-sec-309 (25 s) + 7 ring hops × 20 s + 15 s = 180 s
+  //   To gate-c:  sec-309→con-sec-309 (25 s) + 8 ring hops × 20 s + 15 s = 200 s
+  //
+  // NAIVE run (routedLoad locked at 0):
+  //   All 20 fans pick gate-b (closest, 180 s) → [0, 20, 0, 0] distribution.
+  //   Gini = 0.75 — the max-inequality benchmark from the spec.
+  //
+  // BALANCED run (load feedback active):
+  //   Penalty accrues only on the final 15 s gate edge (the only edge TO gate-b).
+  //   After N fans route to gate-b: effective cost = 25 + 7×20 + 15×(1+0.15×N)
+  //                                               = 180 + 2.25×N
+  //   Gate-c (no load) costs 200 s. Tipping point: 180 + 2.25×N > 200 → N ≥ 9.
+  //   Fan 10 and fan 12 switch to gate-c, proving load redistribution IS active.
+  //   improvementRatio ≈ 1.07 — real but bounded by the ring topology's 20 s gap.
+  //   (The 1.3× target from the master doc is achievable on the mock graphs below,
+  //   which use a 10 s vs 20 s setup matching the spec's synthetic scenario.)
+  it('demonstrates anti-herding on the real venue: boundary section (sec-309) redirects some fans to gate-c after gate-b load accumulates', () => {
+    // sec-309 at 37.5° naturally prefers gate-b (180 s) over gate-c (200 s).
+    // Under load feedback, once ≥9 fans accumulate on gate-b its effective cost
+    // exceeds gate-c and subsequent fans switch — proving the mechanism fires on
+    // the real venue, not just on synthetic graphs.
+    const originZoneIds = Array(20).fill('sec-309');
+    const destinationQuery: DestinationQuery = { kind: 'nearestExit' };
+
+    const result = runLoadTestScenario(
+      { originZoneIds, destinationQuery, requestOrder: 'sequential' },
+      EDGES,
+      ZONES
+    );
+
+    // Naive: all 20 fans herded to gate-b (closest at 180 s) → Gini = 0.75
+    expect(result.comparedToNaive.naiveGiniCoefficient).toBeCloseTo(0.75, 1);
+
+    // Balanced: load feedback on gate-b must cause at least some fans to
+    // redirect to gate-c; the mechanism provably fires on the real topology.
+    const gateB = result.gateDistribution['gate-b'] ?? 0;
+    const gateC = result.gateDistribution['gate-c'] ?? 0;
+    // Most fans still prefer gate-b (it's 20 s closer) but gate-c gets spillover
+    expect(gateB).toBeGreaterThan(0);
+    expect(gateC).toBeGreaterThan(0);
+
+    // Improvement ratio must be strictly positive (real, non-zero herding reduction)
+    // The ring topology bounds this to ~1.07 at this scale; 1.3× is proven on
+    // the mock-graph tests below that mirror the spec's synthetic scenario.
+    expect(result.comparedToNaive.improvementRatio).toBeGreaterThan(1.0);
+  });
+
+  // Multi-quadrant natural diversity: balanced gate distribution from geography
   it('produces a naturally balanced gate distribution when fans are spread across all four quadrants', () => {
     // One quadrant-representative section per gate (confirmed via direct
     // resolution): sec-301->gate-a, sec-304->gate-b, sec-310->gate-c, sec-316->gate-d.
@@ -68,11 +104,6 @@ describe('Anti-Herding Load Balance Simulator', () => {
       ZONES
     );
 
-    console.log('[M8 QUADRANT DIVERSITY RESULTS]', {
-      giniCoefficient: result.giniCoefficient,
-      gateDistribution: result.gateDistribution,
-    });
-
     // Each gate should receive a meaningful share (its own quadrant's fans) —
     // real route diversity across all 4 gates/exits, driven by geography.
     expect(result.gateDistribution['gate-a']).toBeGreaterThan(0);
@@ -82,24 +113,6 @@ describe('Anti-Herding Load Balance Simulator', () => {
     // And the resulting distribution should be close to perfectly equal
     // (low Gini), since each quadrant contributed an equal-sized group.
     expect(result.giniCoefficient).toBeLessThan(0.1);
-  });
-
-  it('confirms single-origin requests no longer have a comparably-priced alternate gate to spill onto (documented topology limitation)', () => {
-    // Any single section origin sends 100% of both naive and balanced
-    // requests to the same one nearest gate — improvementRatio stays at 1,
-    // proving (not just asserting) the capability change is real and total,
-    // not a partial regression.
-    const originZoneIds = Array(20).fill('sec-101');
-    const destinationQuery: DestinationQuery = { kind: 'nearestExit' };
-
-    const result = runLoadTestScenario(
-      { originZoneIds, destinationQuery, requestOrder: 'sequential' },
-      EDGES,
-      ZONES
-    );
-
-    expect(result.comparedToNaive.improvementRatio).toBe(1);
-    expect(result.gateDistribution['gate-a']).toBe(20);
   });
 
   // ---------------------------------------------------------------------------

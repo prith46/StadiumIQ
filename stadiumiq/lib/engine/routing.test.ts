@@ -589,4 +589,98 @@ describe('computeRoute — real venue.ts integration smoke', () => {
     // final section-entry edge), proving the filter reaches the real venue graph.
     expect(filtered.etaSec).toBeGreaterThan(unfiltered.etaSec);
   });
+
+  it('populates reason.avoidedGates with structured items and correct cause when gate is closed or congested', () => {
+    const testZones = [
+      makeZone('A'),
+      makeZone('gate-b', 'gate'),
+      makeZone('gate-c', 'gate'),
+      makeZone('D'),
+    ];
+    const testEdges = [
+      makeEdge('A', 'gate-b', 60),
+      makeEdge('gate-b', 'D', 60),
+      makeEdge('A', 'gate-c', 30),
+      makeEdge('gate-c', 'D', 30),
+    ];
+
+    const resultClosed = computeRoute(
+      'A', 'D', testEdges, testZones, {}, {}, { 'gate-c': 'closed', 'gate-b': 'open' }
+    );
+    expect('error' in resultClosed).toBe(false);
+    if (!('error' in resultClosed)) {
+      expect(resultClosed.path).toEqual(['A', 'gate-b', 'D']);
+      expect(resultClosed.reason.avoidedGates).toEqual([{ gateId: 'gate-c', cause: 'closed' }]);
+    }
+
+    const resultCongested = computeRoute(
+      'A', 'D', testEdges, testZones, {}, {}, { 'gate-c': 'congested', 'gate-b': 'open' }
+    );
+    expect('error' in resultCongested).toBe(false);
+    if (!('error' in resultCongested)) {
+      expect(resultCongested.path).toEqual(['A', 'gate-b', 'D']);
+      expect(resultCongested.reason.avoidedGates).toEqual([{ gateId: 'gate-c', cause: 'congested' }]);
+    }
+  });
+
+  // Fix Batch H-2: the exact failing scenario — 3 gates closed, 1 open, routing
+  // to a nearest-exit GATE destination. Closed gates are candidate destinations
+  // excluded at resolution, never waypoints on the path to the chosen gate, so
+  // the naive-vs-primary path diff can't surface them; they must still appear in
+  // reason.avoidedGates with cause 'closed' so the LLM can explain the closures.
+  it('surfaces ALL closed exit gates in reason.avoidedGates when routed to the sole open gate (3 closed, 1 open)', () => {
+    const gateStatus = {
+      'gate-a': 'closed' as const,
+      'gate-c': 'closed' as const,
+      'gate-d': 'closed' as const,
+      'gate-b': 'open' as const,
+    };
+
+    // Destination gate-b was resolved via nearestExit; the other three are closed.
+    const result = computeRoute(
+      'sec-101', 'gate-b', EDGES, ZONES, {}, {}, gateStatus
+    );
+    expect('error' in result).toBe(false);
+    if ('error' in result) return;
+
+    // Path terminates at the one open gate...
+    expect(result.path[result.path.length - 1]).toBe('gate-b');
+
+    // ...and every closed gate is reported as an avoided exit, with cause 'closed'.
+    expect(result.reason.avoidedGates).toEqual(
+      expect.arrayContaining([
+        { gateId: 'gate-a', cause: 'closed' },
+        { gateId: 'gate-c', cause: 'closed' },
+        { gateId: 'gate-d', cause: 'closed' },
+      ])
+    );
+    expect(result.reason.avoidedGates).toHaveLength(3);
+    // The chosen (open) destination gate is never listed as avoided.
+    expect(result.reason.avoidedGates.some((g) => g.gateId === 'gate-b')).toBe(false);
+
+    // Grounding-payload assertion: the reason data actually survives the exact
+    // JSON.stringify serialization that agents.ts:273 pushes into the LLM
+    // conversation as the `role: 'tool'` message. If avoidedGates were empty
+    // (the original bug) this substring check would fail.
+    const groundingPayload = JSON.stringify(result);
+    expect(groundingPayload).toContain('"gateId":"gate-a","cause":"closed"');
+    expect(groundingPayload).toContain('"gateId":"gate-c","cause":"closed"');
+    expect(groundingPayload).toContain('"gateId":"gate-d","cause":"closed"');
+  });
+
+  // Guard: the closed-gate reasoning must NOT fire for non-gate destinations,
+  // so amenity/zone routes aren't polluted with unrelated closure noise.
+  it('does not add closed-gate reasons when the destination is not a gate', () => {
+    const testZones = [makeZone('A'), makeZone('gate-c', 'gate'), makeZone('D')];
+    const testEdges = [makeEdge('A', 'D', 30), makeEdge('A', 'gate-c', 30)];
+
+    const result = computeRoute(
+      'A', 'D', testEdges, testZones, {}, {}, { 'gate-c': 'closed' }
+    );
+    expect('error' in result).toBe(false);
+    if ('error' in result) return;
+    // gate-c is closed but destination D is not a gate and gate-c is not on any
+    // path to D, so nothing is (incorrectly) reported as an avoided exit.
+    expect(result.reason.avoidedGates).toEqual([]);
+  });
 });

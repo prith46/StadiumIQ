@@ -5,20 +5,31 @@ import HomePage from '@/app/page';
 import { useSimStore } from '@/lib/store/simStore';
 import { useRoleStore } from '@/lib/store/roleStore';
 import { ZONES } from '@/lib/venue/venue';
+import { AppShell } from '@/components/AppShell';
+
+let mockReducedMotion = false;
+vi.mock('framer-motion', async (importOriginal) => {
+  const original = await importOriginal<any>();
+  return {
+    ...original,
+    useReducedMotion: () => mockReducedMotion,
+  };
+});
 
 describe('Mobile / Responsive Fan Layout Integration', () => {
   const originalInnerWidth = window.innerWidth;
 
   beforeEach(() => {
+    mockReducedMotion = false;
     // Force active fan session with mock location section so onboarding is skipped
     useRoleStore.getState().setRole('fan');
     useSimStore.getState().setFanLocation('sec-101');
     useSimStore.getState().setFanTicket({
-      id: 'ticket-1',
       section: '101',
-      row: 'A',
-      seat: '1',
       gate: 'gate-a',
+      nationality: 'US',
+      countryCode: 'US',
+      seat: '1',
     });
   });
 
@@ -99,15 +110,81 @@ describe('Mobile / Responsive Fan Layout Integration', () => {
 
     const { container } = render(<HomePage />);
 
+    // M4 fix: the page no longer wraps the map in a conflicting `.aspect-square`
+    // box (680:396 map content inside a 1:1 box left large empty margins).
+    // StadiumMap's own internal wrapper is the single source of truth for
+    // sizing, so the outer square wrapper must NOT be present.
+    const conflictingSquareWrapper = container.querySelector('.aspect-square');
+    expect(conflictingSquareWrapper).toBeNull();
+
     // Map container elements must have relative position and strict aspect ratio to hold SVG matching overlays
-    const mapWrapper = container.querySelector('.aspect-square');
-    expect(mapWrapper).not.toBeNull();
-    
-    const innerWrapper = container.querySelector('.relative.w-full.max-w-\\[650px\\]');
+    const innerWrapper = container.querySelector('.relative.w-full.max-w-\\[900px\\]');
     expect(innerWrapper).not.toBeNull();
 
     // Aspect ratio styling should match VIEW_W / VIEW_H (680 / 396)
     const style = (innerWrapper as HTMLElement).style;
     expect(style.aspectRatio).toBe('680 / 396');
+  });
+
+  it('collapses settings controls under settings toggle button on mobile header', async () => {
+    act(() => {
+      window.innerWidth = 360;
+      window.dispatchEvent(new Event('resize'));
+    });
+
+    render(
+      <AppShell>
+        <div data-testid="child">Child Content</div>
+      </AppShell>
+    );
+
+    // Header settings toggle should be present on mobile
+    const toggle = screen.getByTestId('header-settings-toggle');
+    expect(toggle).toBeInTheDocument();
+
+    // The dropdown should NOT be present initially
+    expect(screen.queryByTestId('header-settings-dropdown')).toBeNull();
+
+    // Click to open settings
+    act(() => {
+      fireEvent.click(toggle);
+    });
+
+    // Dropdown is now displayed
+    expect(screen.getByTestId('header-settings-dropdown')).toBeInTheDocument();
+
+    // Click to close settings
+    act(() => {
+      fireEvent.click(toggle);
+    });
+
+    // Dropdown is removed
+    await waitFor(() => {
+      expect(screen.queryByTestId('header-settings-dropdown')).toBeNull();
+    });
+  });
+
+  it('honors prefers-reduced-motion setting for bottom sheet and backdrop transitions', () => {
+    act(() => {
+      window.innerWidth = 360;
+      window.dispatchEvent(new Event('resize'));
+    });
+
+    mockReducedMotion = true;
+
+    render(<HomePage />);
+
+    const chatTrigger = screen.getByTestId('mobile-chat-trigger');
+    
+    // Click chat trigger -> bottom sheet opens
+    act(() => {
+      fireEvent.click(chatTrigger);
+    });
+
+    const sheet = screen.getByTestId('mobile-assistant-sheet');
+    const backdrop = screen.getByTestId('mobile-sheet-backdrop');
+
+    expect(sheet).toBeInTheDocument();
+    expect(backdrop).toBeInTheDocument();
   });
 });

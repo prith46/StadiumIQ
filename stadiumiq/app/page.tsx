@@ -11,11 +11,12 @@ import { IncentiveStack } from "@/components/incentives/IncentiveStack";
 import { ZONES } from "@/lib/venue/venue";
 import { SOSOverlay } from "@/components/SOSOverlay";
 import { Dashboard } from "@/components/organizer/Dashboard";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { MessageSquare, X } from "lucide-react";
 
 export default function HomePage() {
   const role = useRoleStore((s) => s.role);
+  const shouldReduceMotion = useReducedMotion();
   const location = useSimStore((s) => s.fanContext.location);
   const ticket = useSimStore((s) => s.fanContext.ticket);
   const isOnboardingOverride = useSimStore((s) => s.isOnboardingOverride);
@@ -31,8 +32,10 @@ export default function HomePage() {
   const [confirmOrganizerSos, setConfirmOrganizerSos] = React.useState(false);
   const [isMobile, setIsMobile] = React.useState(false);
   const [isBottomSheetOpen, setIsBottomSheetOpen] = React.useState(false);
+  const [mounted, setMounted] = React.useState(false);
 
   React.useEffect(() => {
+    setMounted(true);
     const handleResize = () => {
       setIsMobile(window.innerWidth < 768);
     };
@@ -63,6 +66,13 @@ export default function HomePage() {
       if (organizerTimeoutRef.current) clearTimeout(organizerTimeoutRef.current);
     };
   }, []);
+
+  // Prevent hydration mismatch by rendering a consistent layout on SSR / initial mount
+  if (!mounted) {
+    return (
+      <div className="w-full min-h-screen bg-canvas" />
+    );
+  }
 
   // Determine if we should show onboarding
   const showOnboarding = role === "fan" && (!location || isOnboardingOverride);
@@ -110,10 +120,8 @@ export default function HomePage() {
             </div>
 
             {/* Map Panel */}
-            <div className="w-full bg-surface p-4 rounded-xl border border-border shadow-card flex items-center justify-center min-h-[350px]">
-              <div className="w-full max-w-[450px] aspect-square">
-                <StadiumMap ref={mapRef} mode="fan" currentZoneId={location} />
-              </div>
+            <div className="w-full bg-surface p-4 rounded-xl border border-border shadow-card flex items-center justify-center">
+              <StadiumMap ref={mapRef} mode="fan" currentZoneId={location} className="w-full" />
             </div>
           </div>
 
@@ -134,19 +142,20 @@ export default function HomePage() {
               <>
                 {/* Overlay Backdrop */}
                 <motion.div
-                  initial={{ opacity: 0 }}
+                  initial={shouldReduceMotion ? { opacity: 1 } : { opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
+                  exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0 }}
+                  transition={shouldReduceMotion ? { duration: 0 } : undefined}
                   onClick={() => setIsBottomSheetOpen(false)}
                   className="fixed inset-0 bg-black/40 z-50 cursor-pointer"
                   data-testid="mobile-sheet-backdrop"
                 />
                 {/* Bottom Sheet */}
                 <motion.div
-                  initial={{ y: "100%" }}
+                  initial={shouldReduceMotion ? { y: 0 } : { y: "100%" }}
                   animate={{ y: 0 }}
-                  exit={{ y: "100%" }}
-                  transition={{ type: "spring", damping: 25, stiffness: 250 }}
+                  exit={shouldReduceMotion ? { y: 0 } : { y: "100%" }}
+                  transition={shouldReduceMotion ? { duration: 0 } : { type: "spring", damping: 25, stiffness: 250 }}
                   data-testid="mobile-assistant-sheet"
                   className="fixed bottom-0 left-0 right-0 bg-surface rounded-t-2xl border-t border-border shadow-2xl z-50 flex flex-col h-[75vh] overflow-hidden"
                 >
@@ -183,14 +192,12 @@ export default function HomePage() {
         <IncentiveStack mapRef={mapRef} />
         <div className="flex flex-col lg:flex-row gap-6 items-stretch justify-center max-w-7xl mx-auto py-4 w-full">
         {/* Map Panel */}
-        <div className="flex-1 w-full bg-surface p-6 rounded-xl border border-border shadow-card flex items-center justify-center min-h-[500px]">
-          <div className="w-full max-w-[500px] aspect-square">
-            <StadiumMap ref={mapRef} mode="fan" currentZoneId={location} />
-          </div>
+        <div className="flex-1 w-full bg-surface p-6 rounded-xl border border-border shadow-card flex items-center justify-center">
+          <StadiumMap ref={mapRef} mode="fan" currentZoneId={location} className="w-full" />
         </div>
 
         {/* Assistant & Info Panel */}
-        <div className="w-full lg:w-[380px] flex flex-col gap-4 h-[650px] lg:h-auto shrink-0">
+        <div className="w-full lg:w-[380px] flex flex-col gap-4 h-[650px] lg:h-[650px] shrink-0">
           {/* Active Location Info (Compact) */}
           <div className="bg-surface p-4 rounded-xl border border-border shadow-card flex items-center justify-between">
             <div className="flex flex-col gap-0.5">

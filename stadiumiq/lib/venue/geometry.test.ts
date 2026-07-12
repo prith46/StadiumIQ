@@ -70,9 +70,14 @@ describe("F2/M4 Geometry Unit Tests (MAP BUILD SPEC §22.1/§22.6)", () => {
     });
   });
 
-  describe("densityToBand() — §22.6 exact 3-band thresholds (discrete, no interpolation)", () => {
-    it("d < 0.34 -> clear green", () => {
-      expect(densityToBand(0)).toEqual({ fill: "#C0DD97", stroke: "#639922" });
+  describe("densityToBand() — §22.6 exact 4-band thresholds (empty = white/light-grey)", () => {
+    it("d < 0.05 -> empty white/light-grey", () => {
+      expect(densityToBand(0)).toEqual({ fill: "#F1F1EF", stroke: "#D1D1CF" });
+      expect(densityToBand(0.04)).toEqual({ fill: "#F1F1EF", stroke: "#D1D1CF" });
+    });
+
+    it("0.05 <= d < 0.34 -> clear green", () => {
+      expect(densityToBand(0.05)).toEqual({ fill: "#C0DD97", stroke: "#639922" });
       expect(densityToBand(0.33)).toEqual({ fill: "#C0DD97", stroke: "#639922" });
     });
 

@@ -82,6 +82,29 @@ describe('SOSOverlay Component', () => {
     expect(screen.getByText(/Emergency override broadcasts cannot be dismissed locally/i)).toBeInTheDocument();
   });
 
+  it('renders the evacuation route in crimson (#ef4444) and instructs the fan to follow the red path (§m14-sos.md design exception)', () => {
+    useSimStore.setState({
+      sos: {
+        active: true,
+        triggeredBy: 'fan',
+        triggeredAtSec: 100,
+      },
+    });
+
+    const { container } = render(<SOSOverlay />);
+
+    // Text and rendered route color must agree — both must say/be red, not
+    // the standard FIFA-blue (#2563EB) used for M2/M6/M9 routes.
+    expect(screen.getByText(/Follow the red emergency path/i)).toBeInTheDocument();
+    expect(screen.queryByText(/green emergency path/i)).toBeNull();
+
+    const animatedRouteStroke = container.querySelector('#route-overlay path[stroke="#ef4444"]');
+    expect(animatedRouteStroke).not.toBeNull();
+    // Must NOT be rendered in the standard blue accent color while in SOS mode.
+    const blueRouteStroke = container.querySelector('#route-overlay path[stroke="var(--color-accent)"]');
+    expect(blueRouteStroke).toBeNull();
+  });
+
   it('renders fallback stay put alert if no route can be found (all gates closed)', () => {
     useSimStore.setState({
       sos: {

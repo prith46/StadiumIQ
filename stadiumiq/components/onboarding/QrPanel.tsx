@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import QRCode from 'qrcode';
 import { generateDemoQrPayload, parseQrPayload } from '../../lib/onboarding/qr';
+import { CameraQrScan } from './CameraQrScan';
 
 interface QrPanelProps {
   onScan: (zoneId: string) => void;
@@ -13,6 +14,7 @@ interface QrPanelProps {
 export function QrPanel({ onScan, onError, onShowPicker }: QrPanelProps) {
   const [qrSvg, setQrSvg] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(true);
+  const [showCamera, setShowCamera] = useState<boolean>(false);
 
   // Memoize payload to ensure QR is not unnecessarily regenerated
   const demoPayload = useMemo(() => generateDemoQrPayload('sec-214'), []);
@@ -58,6 +60,24 @@ export function QrPanel({ onScan, onError, onShowPicker }: QrPanelProps) {
     }
   };
 
+  if (showCamera) {
+    return (
+      <div className="flex flex-col items-center gap-6 w-full">
+        <div className="text-center w-full">
+          <h2 className="text-2xl font-bold text-text-primary">Scan QR Code</h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            Point your camera at any seat block QR code around the stadium.
+          </p>
+        </div>
+        <CameraQrScan
+          onScan={onScan}
+          onError={onError}
+          onCancel={() => setShowCamera(false)}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col items-center gap-6 w-full">
       <div className="text-center w-full">
@@ -96,6 +116,14 @@ export function QrPanel({ onScan, onError, onShowPicker }: QrPanelProps) {
           className="w-full py-2.5 px-4 bg-accent hover:bg-accent/95 text-white font-semibold rounded-lg shadow-sm transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           Simulate Scan
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setShowCamera(true)}
+          className="w-full py-2.5 px-4 bg-transparent border border-border hover:bg-canvas/50 text-text-primary font-semibold rounded-lg transition-colors text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent cursor-pointer"
+        >
+          Scan with Camera
         </button>
 
         <button

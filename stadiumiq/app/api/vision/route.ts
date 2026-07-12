@@ -60,7 +60,7 @@ export async function POST(req: Request) {
     }
 
     const ticket = detectResult.ticketData;
-    const mapActions = ticket?.section ? [{ type: 'highlightZone', zoneId: ticket.section, pulse: true }] : [];
+    const mapActions = ticket?.section ? [{ op: 'highlight' as const, zoneId: `sec-${ticket.section}` }] : [];
 
     return NextResponse.json({
       message: 'Ticket processed successfully.',

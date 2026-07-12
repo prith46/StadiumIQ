@@ -1,6 +1,7 @@
 import { createClient, ChatMessage } from './client';
 import { Incident } from '../types';
 import { DispatchAssignment } from '../engine/dispatch';
+import { sanitizeUserInput } from './sanitize';
 
 /**
  * Generates an AI summary report for a resolved incident.
@@ -10,10 +11,11 @@ export async function generateIncidentReport(
   incident: Incident,
   assignment: DispatchAssignment
 ): Promise<string> {
-  // Strip tag injections from user-derived notes to prevent prompt injection
-  const sanitizedNote = incident.note
-    .replace(/<user_message>/gi, '[filtered]')
-    .replace(/<\/user_message>/gi, '[filtered]');
+  // Strip ALL prompt-block delimiter tags from user-supplied note text.
+  // incidentReport embeds note inside <incident>…</incident> so we must
+  // strip <incident> in addition to the other tags — this is the gap
+  // that the old inline two-tag sanitizer missed (audit finding 4.3).
+  const sanitizedNote = sanitizeUserInput(incident.note);
 
   const systemPrompt =
     'You are the MetLife Stadium Operations Auditor AI. ' +

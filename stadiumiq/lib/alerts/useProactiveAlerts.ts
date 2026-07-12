@@ -1,23 +1,33 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useSimStore } from '../store/simStore';
 import { useAlertStore } from '../store/alertStore';
 import { runAlertTriageService } from '../engine/alertService';
-import { evaluateProactiveAlerts } from '../engine/proactiveAlerts';
-import { computeServiceRoute } from '../engine/routingService';
-import { DestinationQuery, RouteFilters } from '../engine/alertTriage';
+import type { Alert } from '../types';
 
 /**
  * useProactiveAlerts.ts
  *
  * Ticks alongside F3's simulation clock by subscribing to `matchClockSec`.
- * Runs alert triage service and triggers alerts firing on the alertStore.
+ * Runs the documented M6 alert triage service, throttled to run once every
+ * 10 simulation seconds, and triggers alerts on the alertStore.
  *
- * NO secondary setInterval/timer is created.
+ * Also surfaces active (non-resolved) `Incident`s as 'safety' alerts, derived
+ * live from `useSimStore.incidents` rather than pushed through `fireAlert`.
+ * Incidents already have their own pending/dispatched/resolved lifecycle
+ * (created via GodMode/UploadPanel/DispatchQueue), so re-deriving from that
+ * source of truth on every render is simpler and always correct — no
+ * duplicate state, no cooldown bookkeeping to keep in sync. This is what
+ * makes the Organizer Dashboard's "Operations Alerts Feed" (which reuses this
+ * hook via AlertStack) actually reflect an active incident instead of always
+ * showing "No active alerts". Deliberately NOT gated behind `location` like
+ * the fan-triage effect below — an organizer session may have no fan
+ * location set at all, and incident visibility shouldn't depend on it.
  */
 export function useProactiveAlerts() {
   const matchClockSec = useSimStore((s) => s.matchClockSec);
   const location = useSimStore((s) => s.fanContext.location);
   const leavingEarly = useSimStore((s) => s.fanContext.leavingEarly);
+  const incidents = useSimStore((s) => s.incidents);
 
   // Subscribe to the activeAlerts array in useAlertStore.
   const activeAlerts = useAlertStore((s) => s.activeAlerts);
@@ -25,17 +35,11 @@ export function useProactiveAlerts() {
 
   const lastCheckedClockRef = useRef<number | null>(null);
 
-  // Run the alerts triage on every clock tick change or fan context location/early-leaving change
+  // Run the alerts triage on every clock tick change or fan context changes (throttled to 10s simulation time)
   useEffect(() => {
     if (!location) return;
 
-    // 1. Run the existing alerts triage on every clock tick change
-    const evaluatedExisting = runAlertTriageService();
-    for (const item of evaluatedExisting) {
-      fireAlert(item.triggerKey, item.alert, matchClockSec);
-    }
-
-    // 2. Throttle M6 evaluation to once every 10 simulation seconds
+    // Throttle evaluation to once every 10 simulation seconds
     if (lastCheckedClockRef.current !== null) {
       const delta = matchClockSec - lastCheckedClockRef.current;
       if (delta >= 0 && delta < 10) {
@@ -44,48 +48,28 @@ export function useProactiveAlerts() {
     }
     lastCheckedClockRef.current = matchClockSec;
 
-    // 3. Run M6 Proactive Exit Alerts evaluation
-    const dismissedAlertIds = new Set(useAlertStore.getState().dismissedAlertIds);
-
-    // Get current route to the nearest exit to determine the target gate
-    const currentRouteResult = computeServiceRoute({ kind: 'nearestExit' });
-    let currentRoute: { path: string[]; etaSec: number; targetGate: string } | undefined = undefined;
-
-    if (!('error' in currentRouteResult)) {
-      const targetGate = [...currentRouteResult.path].reverse().find((id) => id.startsWith('gate-'));
-      if (targetGate) {
-        currentRoute = {
-          path: currentRouteResult.path,
-          etaSec: currentRouteResult.etaSec,
-          targetGate,
-        };
-      }
-    }
-
-    const simState = useSimStore.getState();
-    const { density, gateStatus, fanContext, timeline } = simState;
-
-    const computeRouteFn = (origin: string, dest: DestinationQuery, filters?: RouteFilters) => {
-      return computeServiceRoute(dest, filters, origin);
-    };
-
-    const proactiveAlerts = evaluateProactiveAlerts({
-      matchClockSec,
-      density,
-      gateStatus,
-      fanContext,
-      timeline,
-      currentRoute,
-      dismissedAlertIds,
-      computeRouteFn,
-    });
-
-    for (const alert of proactiveAlerts) {
-      const { id, createdAt, ...alertData } = alert;
-      fireAlert(id, alertData, matchClockSec);
+    // Run the documented alerts triage service
+    const evaluatedExisting = runAlertTriageService();
+    for (const item of evaluatedExisting) {
+      fireAlert(item.triggerKey, item.alert, matchClockSec);
     }
   }, [matchClockSec, location, leavingEarly, fireAlert]);
 
-  return activeAlerts;
+  const incidentAlerts = useMemo<Alert[]>(() => {
+    return incidents
+      .filter((inc) => inc.status !== 'resolved')
+      .map((inc) => ({
+        id: `incident-alert-${inc.id}`,
+        kind: 'safety' as const,
+        priority: (inc.type === 'medical' || inc.type === 'evacuation' ? 1 : 2) as 1 | 2 | 3,
+        title: `${inc.type.charAt(0).toUpperCase()}${inc.type.slice(1)} incident — ${inc.zoneId}`,
+        body: inc.note || 'Reported incident requires attention.',
+        zoneId: inc.zoneId,
+        createdAt: inc.createdAt,
+        action: 'Show on map',
+      }));
+  }, [incidents]);
+
+  return useMemo(() => [...incidentAlerts, ...activeAlerts], [incidentAlerts, activeAlerts]);
 }
 

@@ -23,6 +23,25 @@ describe('Map action dispatcher', () => {
     expect(handle.dropPin).toHaveBeenCalledWith('sec-108', 'incident');
   });
 
+  it('normalizes a bare section number to the real prefixed zone id (Fix 7)', async () => {
+    const handle: StadiumMapHandle = {
+      highlightZone: vi.fn(),
+      drawRoute: vi.fn().mockResolvedValue(undefined),
+      dropPin: vi.fn(),
+      clearOverlay: vi.fn(),
+    };
+
+    const actions: MapAction[] = [
+      { op: 'highlight', zoneId: '205' }, // bare id — should resolve to 'sec-205'
+      { op: 'pin', zoneId: '108' },
+    ];
+
+    await dispatchMapActions(actions, handle);
+
+    expect(handle.highlightZone).toHaveBeenCalledWith('sec-205');
+    expect(handle.dropPin).toHaveBeenCalledWith('sec-108', 'incident');
+  });
+
   it('skips and logs warnings on malformed actions', async () => {
     const handle: StadiumMapHandle = {
       highlightZone: vi.fn(),

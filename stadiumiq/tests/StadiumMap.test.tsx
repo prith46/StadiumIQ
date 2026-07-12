@@ -16,7 +16,9 @@ vi.mock("@/lib/store/simStore", () => {
     useSimStore: vi.fn((selector) => {
       return selector({
         density: mockDensity,
+        previousDensity: {},
         gateStatus: mockGateStatus,
+        sensorCounts: {},
       });
     }),
   };
@@ -120,7 +122,7 @@ describe("StadiumMap Component & Overlay Tests", () => {
       act(() => {
         ref.current?.highlightZone("sec-101", { pulse: true });
       });
-      let highlighted = container.querySelector('#overlay-layer [stroke="#2563EB"]');
+      let highlighted = container.querySelector('#overlay-layer [stroke="var(--color-accent)"]');
       expect(highlighted).not.toBeNull();
       expect(highlighted?.getAttribute("d")).toBeDefined();
       expect(highlighted?.getAttribute("class")).toContain("animate-pulse");
@@ -151,7 +153,7 @@ describe("StadiumMap Component & Overlay Tests", () => {
       act(() => {
         ref.current?.dropPin("sec-101", "incident");
       });
-      let pin = container.querySelector('#overlay-layer [fill="#EF4444"]'); // Incident color
+      let pin = container.querySelector('#overlay-layer [fill="var(--color-danger)"]'); // Incident color
       expect(pin).not.toBeNull();
 
       // Invalid Pin
@@ -177,6 +179,28 @@ describe("StadiumMap Component & Overlay Tests", () => {
       warnSpy.mockRestore();
       vi.useRealTimers();
     });
+
+    it("Fix 7: highlightZone and dropPin both render for a real venue.ts zone id", () => {
+      const realZoneId = ZONES.find((z) => z.type === "section")!.id;
+      const ref = createRef<StadiumMapHandle>();
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { container } = render(<StadiumMap mode="organizer" ref={ref} />);
+
+      act(() => {
+        ref.current?.highlightZone(realZoneId, { pulse: true });
+        ref.current?.dropPin(realZoneId, "incident");
+      });
+
+      const highlighted = container.querySelector('#overlay-layer [stroke="var(--color-accent)"]');
+      const pin = container.querySelector('#overlay-layer [fill="var(--color-danger)"]');
+
+      expect(highlighted).not.toBeNull();
+      expect(pin).not.toBeNull();
+      expect(warnSpy).not.toHaveBeenCalled();
+
+      warnSpy.mockRestore();
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -193,14 +217,14 @@ describe("StadiumMap Component & Overlay Tests", () => {
       });
 
       // Pre-existing assertion: class must contain animate-pulse (for reduced-motion CSS fallback)
-      const highlighted = container.querySelector('#overlay-layer [stroke="#2563EB"]');
+      const highlighted = container.querySelector('#overlay-layer [stroke="var(--color-accent)"]');
       expect(highlighted).not.toBeNull();
       expect(highlighted?.getAttribute("class")).toContain("animate-pulse");
 
       // M5 assertion: Framer Motion's data-animate attribute or the element is a motion element
       // In JSDOM, Framer Motion renders the final state immediately — confirm the element exists
-      // with the correct attributes (fill is rgba, stroke is #2563EB)
-      expect(highlighted?.getAttribute("stroke")).toBe("#2563EB");
+      // with the correct attributes (fill is rgba, stroke is var(--color-accent))
+      expect(highlighted?.getAttribute("stroke")).toBe("var(--color-accent)");
       // §22.8: highlight stroke width is exactly 2.5 (was 3 pre-M4-rebuild)
       expect(highlighted?.getAttribute("stroke-width")).toBe("2.5");
     });
@@ -248,27 +272,27 @@ describe("StadiumMap Component & Overlay Tests", () => {
       const ref = createRef<StadiumMapHandle>();
       const { container } = render(<StadiumMap mode="organizer" ref={ref} />);
 
-      // Incident pin — red
+      // Incident pin — red (var(--color-danger))
       act(() => { ref.current?.dropPin("sec-101", "incident"); });
-      const incidentPin = container.querySelector('#overlay-layer [fill="#EF4444"]');
+      const incidentPin = container.querySelector('#overlay-layer [fill="var(--color-danger)"]');
       expect(incidentPin).not.toBeNull();
       expect(incidentPin?.getAttribute("stroke")).toBe("white");
       expect(incidentPin?.getAttribute("stroke-width")).toBe("1.5");
 
       act(() => { ref.current?.clearOverlay(); });
 
-      // Dispatch pin — FIFA blue (#2563EB)
+      // Dispatch pin — FIFA blue (var(--color-accent))
       act(() => { ref.current?.dropPin("sec-102", "dispatch"); });
-      const dispatchPin = container.querySelector('#overlay-layer [fill="#2563EB"]');
-      // Note: dispatch pin blue (#2563EB) also appears on route overlays when active;
+      const dispatchPin = container.querySelector('#overlay-layer [fill="var(--color-accent)"]');
+      // Note: dispatch pin blue also appears on route overlays when active;
       // ensure we find a pin-shaped path specifically (within motion.g with transform)
       expect(dispatchPin).not.toBeNull();
 
       act(() => { ref.current?.clearOverlay(); });
 
-      // POI pin — neutral gray (#94A3B8)
+      // POI pin — neutral gray (var(--color-text-secondary))
       act(() => { ref.current?.dropPin("sec-103", "poi"); });
-      const poiPin = container.querySelector('#overlay-layer [fill="#94A3B8"]');
+      const poiPin = container.querySelector('#overlay-layer [fill="var(--color-text-secondary)"]');
       expect(poiPin).not.toBeNull();
       expect(poiPin?.getAttribute("stroke")).toBe("white");
       expect(poiPin?.getAttribute("stroke-width")).toBe("1.5");
@@ -328,14 +352,14 @@ describe("StadiumMap Component & Overlay Tests", () => {
   });
 
   describe("Loading & Error States", () => {
-    it("renders sections in neutral gray #E5E7EB with shimmer-active when density is undefined", () => {
+    it("renders sections in neutral gray var(--color-border) with shimmer-active when density is undefined", () => {
       mockDensity = undefined; // Force loading state
       const { container } = render(<StadiumMap mode="fan" />);
 
       const sections = container.querySelectorAll('path[id^="sec-"]');
       expect(sections.length).toBe(60);
       sections.forEach((sec) => {
-        expect(sec.getAttribute("fill")).toBe("#E5E7EB");
+        expect(sec.getAttribute("fill")).toBe("var(--color-border)");
         expect(sec.getAttribute("class")).toContain("shimmer-active");
       });
     });

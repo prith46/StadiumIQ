@@ -125,7 +125,7 @@ export function UploadPanel() {
   };
 
   return (
-    <div className="flex flex-col gap-4 h-full" data-testid="upload-panel-container">
+    <div className="flex flex-col gap-4 h-full" data-testid="upload-panel-container" role="region" aria-label="Dataset Importer">
       {/* 1. File Upload Dropzone */}
       <div className="flex items-center gap-2">
         <label className="flex-1 flex items-center justify-center gap-2 py-2 px-3 border border-dashed border-blue-200 hover:border-blue-300 bg-blue-50/20 hover:bg-blue-50/50 rounded-xl text-blue-800 text-[11px] font-bold transition-all cursor-pointer select-none">
@@ -160,7 +160,7 @@ export function UploadPanel() {
             <FileCode className="w-3.5 h-3.5 text-accent" />
             Sample Upload Dataset Format
           </span>
-          <pre className="font-mono text-[9px] text-text-primary bg-surface border border-border/60 p-2.5 rounded overflow-x-auto max-h-[140px] leading-relaxed">
+          <pre className="font-mono text-sm text-text-primary bg-surface border border-border/60 p-2.5 rounded overflow-x-auto max-h-[140px] leading-relaxed">
             {sampleJsonText}
           </pre>
         </div>
@@ -176,7 +176,7 @@ export function UploadPanel() {
             placeholder='{ "density": { "sec-101": 0.8 }, "gateStatus": { "gate-a": "closed" } }'
             data-testid="upload-textarea"
             rows={4}
-            className="w-full p-3 rounded-xl border border-border bg-canvas text-xs focus:outline-none focus:ring-1 focus:ring-accent font-mono text-[10px] leading-relaxed placeholder:text-text-secondary/50 text-text-primary resize-none"
+            className="w-full p-3 rounded-xl border border-border bg-canvas focus:outline-none focus:ring-1 focus:ring-accent font-mono text-sm leading-relaxed placeholder:text-text-secondary/50 text-text-primary resize-none"
           />
         </div>
 

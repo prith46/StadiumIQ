@@ -30,6 +30,14 @@ export interface ToolCall {
   name: string;
   args: Record<string, unknown>;
   id: string;
+  /**
+   * Gemini function-calling protocol: an opaque signature Gemini attaches to a
+   * functionCall part. It MUST be echoed back on the same part when the model
+   * turn is replayed as conversation history, or subsequent turns fail with
+   * "Function call is missing a thought_signature". Empty for providers (Groq)
+   * that don't use it. See https://ai.google.dev/gemini-api/docs/thought-signatures
+   */
+  thoughtSignature?: string;
 }
 
 export interface ChatResult {
@@ -41,6 +49,27 @@ export interface AiClient {
   supportsVision: boolean;
   chat(messages: ChatMessage[], tools: ToolSchema[]): Promise<ChatResult>;
   visionChat(messages: ChatMessage[], imageBase64: string, mimeType: string): Promise<ChatResult>;
+}
+
+/**
+ * Pulls the human-readable error message out of a non-OK provider response so
+ * the real cause (e.g. "API key not valid") is preserved instead of a bare
+ * status code. Falls back to the raw body / status text if the body isn't the
+ * expected `{ error: { message } }` JSON shape.
+ */
+async function extractProviderError(res: Response): Promise<string> {
+  let raw = '';
+  try {
+    raw = await res.text();
+  } catch {
+    return res.statusText || 'unknown error';
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed?.error?.message || raw.slice(0, 500) || res.statusText;
+  } catch {
+    return raw.slice(0, 500) || res.statusText || 'unknown error';
+  }
 }
 
 async function fetchWithRetry(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
@@ -57,8 +86,12 @@ async function fetchWithRetry(url: string, options: RequestInit, timeoutMs: numb
       });
       clearTimeout(id);
 
-      if (res.status >= 500) {
+      if (res.status >= 500 || res.status === 429) {
         if (attempts < 2) {
+          if (res.status === 429) {
+            // Wait 250ms before retrying rate-limited request
+            await new Promise((resolve) => setTimeout(resolve, 250));
+          }
           continue; // retry once
         }
         throw new Error(`HTTP error ${res.status}`);
@@ -127,12 +160,20 @@ class GeminiClient implements AiClient {
           if (Array.isArray(toolCalls) && toolCalls.length > 0 && toolCalls[0]?.name) {
             contents.push({
               role: 'model',
-              parts: toolCalls.map(tc => ({
-                functionCall: {
-                  name: tc.name,
-                  args: tc.args
+              parts: toolCalls.map(tc => {
+                const part: any = {
+                  functionCall: {
+                    name: tc.name,
+                    args: tc.args
+                  }
+                };
+                // Echo the thought signature back on the same part — Gemini
+                // requires it on every functionCall part sent as history.
+                if (tc.thoughtSignature) {
+                  part.thoughtSignature = tc.thoughtSignature;
                 }
-              }))
+                return part;
+              })
             });
           } else {
             contents.push({
@@ -180,7 +221,28 @@ class GeminiClient implements AiClient {
       // Configure JSON schema response format if no tools are actively requested on 3rd turn
       if (tools.length === 0) {
         body.generationConfig = {
-          responseMimeType: 'application/json'
+          responseMimeType: 'application/json',
+          responseSchema: formatSchemaTypesForGemini({
+            type: 'object',
+            properties: {
+              message: { type: 'string' },
+              language: { type: 'string' },
+              mapActions: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    op: { type: 'string', enum: ['highlight', 'route', 'pin'] },
+                    zoneId: { type: 'string' },
+                    path: { type: 'array', items: { type: 'string' } }
+                  },
+                  required: ['op']
+                }
+              },
+              alertLevel: { type: 'string', enum: ['none', 'info', 'warn', 'critical'] }
+            },
+            required: ['message', 'language', 'mapActions', 'alertLevel']
+          })
         };
       }
 
@@ -191,7 +253,7 @@ class GeminiClient implements AiClient {
       }, AI_ENV.LLM_TIMEOUT_MS);
 
       if (!res.ok) {
-        throw new Error(`HTTP error ${res.status}`);
+        throw new Error(`Gemini API ${res.status}: ${await extractProviderError(res)}`);
       }
 
       const data = await res.json();
@@ -213,14 +275,22 @@ class GeminiClient implements AiClient {
           toolCalls.push({
             name: part.functionCall.name,
             args: part.functionCall.args || {},
-            id: part.functionCall.name
+            id: part.functionCall.name,
+            // Preserve Gemini's thought signature so it can be replayed on the
+            // functionCall part in the next turn's history (required by the
+            // Gemini function-calling protocol).
+            thoughtSignature: part.thoughtSignature,
           });
         }
       }
 
       return { text, toolCalls };
     } catch (err: any) {
-      throw new AiClientError('Gemini communication failure: ' + (err.name === 'AbortError' ? 'timeout' : 'request failed'));
+      const detail = err?.name === 'AbortError' ? 'timeout' : (err?.message || 'request failed');
+      // Log the real underlying cause (e.g. "Gemini API 400: API key not valid")
+      // rather than only the generic wrapper, so failures are diagnosable from logs.
+      console.error('[GeminiClient.chat] request failed:', detail);
+      throw new AiClientError('Gemini communication failure: ' + detail);
     }
   }
 
@@ -257,7 +327,28 @@ class GeminiClient implements AiClient {
       const body: any = {
         contents,
         generationConfig: {
-          responseMimeType: 'application/json'
+          responseMimeType: 'application/json',
+          responseSchema: formatSchemaTypesForGemini({
+            type: 'object',
+            properties: {
+              message: { type: 'string' },
+              language: { type: 'string' },
+              mapActions: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    op: { type: 'string', enum: ['highlight', 'route', 'pin'] },
+                    zoneId: { type: 'string' },
+                    path: { type: 'array', items: { type: 'string' } }
+                  },
+                  required: ['op']
+                }
+              },
+              alertLevel: { type: 'string', enum: ['none', 'info', 'warn', 'critical'] }
+            },
+            required: ['message', 'language', 'mapActions', 'alertLevel']
+          })
         }
       };
 
@@ -274,7 +365,7 @@ class GeminiClient implements AiClient {
       }, AI_ENV.LLM_TIMEOUT_MS);
 
       if (!res.ok) {
-        throw new Error(`HTTP error ${res.status}`);
+        throw new Error(`Gemini API ${res.status}: ${await extractProviderError(res)}`);
       }
 
       const data = await res.json();
@@ -285,7 +376,9 @@ class GeminiClient implements AiClient {
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text || null;
       return { text, toolCalls: [] };
     } catch (err: any) {
-      throw new AiClientError('Gemini vision communication failure: ' + (err.name === 'AbortError' ? 'timeout' : 'request failed'));
+      const detail = err?.name === 'AbortError' ? 'timeout' : (err?.message || 'request failed');
+      console.error('[GeminiClient.visionChat] request failed:', detail);
+      throw new AiClientError('Gemini vision communication failure: ' + detail);
     }
   }
 }
@@ -364,7 +457,7 @@ class GroqClient implements AiClient {
       }, AI_ENV.LLM_TIMEOUT_MS);
 
       if (!res.ok) {
-        throw new Error(`HTTP error ${res.status}`);
+        throw new Error(`Groq API ${res.status}: ${await extractProviderError(res)}`);
       }
 
       const data = await res.json();
@@ -393,7 +486,9 @@ class GroqClient implements AiClient {
 
       return { text, toolCalls };
     } catch (err: any) {
-      throw new AiClientError('Groq communication failure: ' + (err.name === 'AbortError' ? 'timeout' : 'request failed'));
+      const detail = err?.name === 'AbortError' ? 'timeout' : (err?.message || 'request failed');
+      console.error('[GroqClient.chat] request failed:', detail);
+      throw new AiClientError('Groq communication failure: ' + detail);
     }
   }
 

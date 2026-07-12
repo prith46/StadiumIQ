@@ -7,7 +7,7 @@ import { useSimStore } from '@/lib/store/simStore';
 describe('Copilot React Component', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn());
-    
+
     useSimStore.setState({
       matchClockSec: 600,
       density: { 'sec-101': 0.4 },
@@ -21,7 +21,7 @@ describe('Copilot React Component', () => {
     vi.restoreAllMocks();
   });
 
-  it('renders input, submits query, and displays structured brief', async () => {
+  it('renders input, submits query, and injects the reply into the same chat thread as a normal message', async () => {
     const mockFetch = vi.mocked(global.fetch).mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -46,18 +46,21 @@ describe('Copilot React Component', () => {
       fireEvent.click(submitBtn);
     });
 
-    // Verify loader and then final response rendering
     expect(mockFetch).toHaveBeenCalledWith('/api/copilot', expect.objectContaining({
       method: 'POST',
       body: expect.stringContaining('what are my risks'),
     }));
 
-    expect(screen.getByText('MetLife Stadium is currently stable. A minor congestion risk is present.')).toBeInTheDocument();
-    expect(screen.getByText('"Queue building up"')).toBeInTheDocument();
-    expect(screen.getByText('Monitor gate-a closely.')).toBeInTheDocument();
+    // The user's own query appears as a chat bubble too (same thread).
+    expect(screen.getByText('what are my risks')).toBeInTheDocument();
+
+    // Assistant reply renders as one message's text, not a separate fixed block.
+    expect(screen.getByText(/MetLife Stadium is currently stable/)).toBeInTheDocument();
+    expect(screen.getByText(/Queue building up/)).toBeInTheDocument();
+    expect(screen.getByText(/Monitor gate-a closely\./)).toBeInTheDocument();
   });
 
-  it('renders forecast response when Generate Forecast button is clicked', async () => {
+  it('injects the forecast result into the chat thread when the header forecast button is clicked', async () => {
     const mockFetch = vi.mocked(global.fetch).mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -81,11 +84,34 @@ describe('Copilot React Component', () => {
       body: expect.stringContaining('"type":"forecast"'),
     }));
 
-    expect(screen.getByText('A peak crowd of 85% is predicted in 15 minutes.')).toBeInTheDocument();
-    expect(screen.getByText('Clock 25:00')).toBeInTheDocument(); // 1500s is 25:00
-    expect(screen.getByText('sec-101')).toBeInTheDocument();
-    expect(screen.getByText('85% Density')).toBeInTheDocument();
-    expect(screen.getByText('Deploy extra stewards to sec-101.')).toBeInTheDocument();
+    // All of narrative, peak time, top zones, and staffing advice render as
+    // part of one assistant chat message — not separate cards.
+    expect(screen.getByText(/A peak crowd of 85% is predicted in 15 minutes\./)).toBeInTheDocument();
+    expect(screen.getByText(/Clock 25:00/)).toBeInTheDocument(); // 1500s is 25:00
+    expect(screen.getByText(/sec-101: 85% Density/)).toBeInTheDocument();
+    expect(screen.getByText(/Deploy extra stewards to sec-101\./)).toBeInTheDocument();
+  });
+
+  it('never renders a raw unrounded float in the forecast peak time (Fix 7)', async () => {
+    const mockFetch = vi.mocked(global.fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        peakAtSec: 60.9990000000000023,
+        topZones: [],
+        narrative: 'Peak crush predicted shortly.',
+        staffingRecommendation: 'Hold current staffing levels.'
+      }),
+    } as any);
+
+    render(<Copilot />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('copilot-forecast-btn'));
+    });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(screen.getByText(/Clock 01:00/)).toBeInTheDocument();
+    expect(screen.queryByText(/0\.999/)).not.toBeInTheDocument();
   });
 
   it('displays a warning banner when the copilot request fails', async () => {

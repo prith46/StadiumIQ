@@ -34,7 +34,9 @@ export function SOSOverlay() {
   useEffect(() => {
     if (mapRef.current) {
       if (exitRoute.path) {
-        mapRef.current.drawRoute(exitRoute.path);
+        // §m14-sos.md "Design Exception": the evacuation path renders in
+        // crimson (#ef4444), not the standard FIFA-blue route color.
+        mapRef.current.drawRoute(exitRoute.path, 'emergency');
       } else {
         mapRef.current.clearOverlay();
       }
@@ -99,7 +101,7 @@ export function SOSOverlay() {
                 </div>
                 <div className="flex items-start gap-2">
                   <span className="font-black text-red-400">2.</span>
-                  <span>Follow the green emergency path displayed on your map.</span>
+                  <span>Follow the red emergency path displayed on your map.</span>
                 </div>
                 <div className="flex items-start gap-2">
                   <span className="font-black text-red-400">3.</span>

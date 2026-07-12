@@ -91,7 +91,9 @@ describe('Accessibility-First Routing (M11)', () => {
     const routeOmitted = computeRoute('A', 'D', mockEdges, mockZones, density, routedLoad, gateStatus);
     const routeFalse = computeRoute('A', 'D', mockEdges, mockZones, density, routedLoad, gateStatus, { accessibleOnly: false });
 
-    expect(!('error' in routeOmitted) && !('error' in routeFalse) && routeOmitted.path).toEqual(routeFalse.path);
+    const pathOmitted = !('error' in routeOmitted) ? routeOmitted.path : [];
+    const pathFalse = !('error' in routeFalse) ? routeFalse.path : [];
+    expect(pathOmitted).toEqual(pathFalse);
   });
 
   describe('prioritizeAccessibleFacilities', () => {
@@ -102,6 +104,8 @@ describe('Accessibility-First Routing (M11)', () => {
         type,
         nearestZone,
         status: 'open',
+        angle: 0,
+        r: 0,
       };
     }
 

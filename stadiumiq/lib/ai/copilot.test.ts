@@ -78,10 +78,12 @@ describe('Organizer AI Copilot Service', () => {
       {
         atSec: 600,
         density: { 'sec-101': 0.2, 'sec-102': 0.4 },
+        gateStatus: {},
       },
       {
         atSec: 1500, // +15 mins
         density: { 'sec-101': 0.9, 'sec-102': 0.5 },
+        gateStatus: {},
       },
     ];
 

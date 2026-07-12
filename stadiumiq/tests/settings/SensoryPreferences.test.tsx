@@ -37,8 +37,11 @@ describe("Module M10 SensoryPreferences Tests", () => {
 
     fireEvent.click(screen.getByLabelText("Prefer open-air"));
 
+    // Badge text states the actual routing effect (M10 item 5c), not just an
+    // on/off state, so the fan can tell the toggle does something real.
     const badge = screen.getByRole("status", { name: "Sensory preference active" });
-    expect(badge.textContent).toContain("Open-air: on");
+    expect(badge.textContent).toContain("Open-air");
+    expect(badge.textContent).toContain("avoiding enclosed passages");
   });
 
   it("badge disappears again when the preference is toggled back off", () => {

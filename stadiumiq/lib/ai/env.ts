@@ -4,7 +4,8 @@ const schema = z.object({
   LLM_PROVIDER: z.enum(['gemini', 'groq']),
   LLM_MODEL: z.string().min(1),
   LLM_API_KEY: z.string().min(1),
-  LLM_TIMEOUT_MS: z.coerce.number().positive().default(8000),
+  // Master doc F4 claims "aborts hangs after 15s". We align with this spec by defaulting to 15000ms.
+  LLM_TIMEOUT_MS: z.coerce.number().positive().default(15000),
 });
 
 let cachedEnv: any = null;

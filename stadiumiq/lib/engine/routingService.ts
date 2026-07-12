@@ -17,6 +17,7 @@ import { EDGES, ZONES, POIS } from '../venue/venue';
 import { useSimStore } from '../store/simStore';
 import { RouteFilters, RouteResult, RouteError, computeRoute } from './routing';
 import { DestinationQuery, resolveDestination, ResolveError } from './destinationResolver';
+import { sensoryToRouteFilters } from './sensoryFilters';
 import { Poi } from '../types';
 
 export type { DestinationQuery } from './destinationResolver';
@@ -59,12 +60,15 @@ export function computeServiceRoute(
     poiStatus[poi.id] = poi.status;
   }
 
-  // Apply fanContext accessibility as default filter
+  // Apply fanContext accessibility + persistent sensory preferences as default filters.
+  // Caller-supplied filters take precedence field-by-field via ?? (same pattern as
+  // alertService.ts:74-80, incentiveService.ts:23, tools.ts:195-202).
+  const persistentSensory = sensoryToRouteFilters(fanContext.sensory);
   const effectiveFilters: RouteFilters = {
     accessibleOnly: fanContext.accessibility || filters?.accessibleOnly,
-    avoidEnclosed: filters?.avoidEnclosed,
-    maxNoise: filters?.maxNoise,
-    avoidAffiliation: filters?.avoidAffiliation,
+    avoidEnclosed: filters?.avoidEnclosed ?? persistentSensory.avoidEnclosed,
+    maxNoise: filters?.maxNoise ?? persistentSensory.maxNoise,
+    avoidAffiliation: filters?.avoidAffiliation ?? persistentSensory.avoidAffiliation,
   };
 
   // Resolve destination

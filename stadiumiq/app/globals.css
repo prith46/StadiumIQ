@@ -63,12 +63,10 @@
   --radius: 12px;
 }
 
-/* High contrast overrides */
-.high-contrast {
-  --color-text-secondary: #000000;
-  --color-border: #374151;
-  --border: #374151;
-  --muted-foreground: #000000;
+/* Scales the root font-size so every rem-based Tailwind utility (text-sm,
+   text-base, etc.) grows with it — not just body's own inherited text. */
+html {
+  font-size: calc(16px * var(--font-scale));
 }
 
 @layer base {
@@ -78,7 +76,6 @@
   body {
     background-color: var(--color-canvas);
     color: var(--color-text-primary);
-    font-size: calc(1rem * var(--font-scale));
     font-family: var(--font-sans), system-ui, sans-serif;
   }
   h1, h2, h3, h4, h5, h6 {

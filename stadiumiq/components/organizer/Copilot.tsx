@@ -2,21 +2,125 @@
 
 import React, { useState } from 'react';
 import { useSimStore } from '@/lib/store/simStore';
+import { RESPONDERS } from '@/lib/venue/responders';
+import { MessageList } from '@/components/assistant/MessageList';
+import type { Message } from '@/components/assistant/MessageBubble';
 import {
   Cpu,
   Sparkles,
   Send,
   AlertTriangle,
-  Loader2,
-  CheckCircle,
-  HelpCircle,
-  Users,
-  Compass
+  RotateCcw,
 } from 'lucide-react';
 
+interface Brief {
+  summary: string;
+  topRisks: Array<{
+    description: string;
+    zoneId?: string;
+    priority: 1 | 2 | 3;
+  }>;
+  recommendedActions: string[];
+}
+
+interface Forecast {
+  peakAtSec: number;
+  topZones: Array<{
+    zoneId: string;
+    density: number;
+    confidenceBand?: {
+      densityLow: number;
+      densityHigh: number;
+      crossingSecEarliest: number;
+      crossingSecLatest: number;
+      method: 'sampled' | 'heuristic';
+    };
+  }>;
+  narrative: string;
+  staffingRecommendation: string;
+  prepositioning?: Array<{
+    responderId: string;
+    fromZone: string;
+    toZone: string;
+    recommendedDepartSec: number;
+    willArriveInTime: boolean;
+  }>;
+}
+
+// Fix 7: floor before both the /60 and %60 — a non-integer secs value (e.g.
+// an interpolated timeline timestamp) otherwise leaks a raw float into the
+// seconds component (e.g. "01:0.9990000000000023").
+function formatTime(secs: number): string {
+  const wholeSecs = Math.floor(secs);
+  const m = Math.floor(wholeSecs / 60);
+  const s = wholeSecs % 60;
+  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
+
+const priorityLabel = (priority: 1 | 2 | 3) =>
+  priority === 1 ? 'High Priority' : priority === 2 ? 'Medium' : 'Low';
+
+// Fix 2: format the brief/forecast results as plain message text so they
+// render through the exact same MessageBubble/MessageList path as a typed
+// query, instead of separate fixed display blocks.
+function formatBriefMessage(brief: Brief): string {
+  const lines: string[] = [brief.summary];
+
+  if (brief.topRisks && brief.topRisks.length > 0) {
+    lines.push('', '**Prioritized Risks:**');
+    brief.topRisks.forEach((risk) => {
+      const zoneSuffix = risk.zoneId ? ` (Zone: ${risk.zoneId})` : '';
+      lines.push(`- [${priorityLabel(risk.priority)}] "${risk.description}"${zoneSuffix}`);
+    });
+  }
+
+  if (brief.recommendedActions && brief.recommendedActions.length > 0) {
+    lines.push('', '**Recommended Dispatch Actions:**');
+    brief.recommendedActions.forEach((action) => lines.push(`- ${action}`));
+  }
+
+  return lines.join('\n');
+}
+
+function formatForecastMessage(forecast: Forecast, matchClockSec: number): string {
+  const lines: string[] = [forecast.narrative];
+
+  lines.push('', `**Predicted Peak Time:** Clock ${formatTime(forecast.peakAtSec)}`);
+
+  if (forecast.topZones && forecast.topZones.length > 0) {
+    lines.push('', '**Peak Density Areas:**');
+    forecast.topZones.forEach((zone) => {
+      let line = `- ${zone.zoneId}: ${Math.round(zone.density * 100)}% Density`;
+      if (zone.confidenceBand) {
+        const lowPct = Math.round(zone.confidenceBand.densityLow * 100);
+        const highPct = Math.round(zone.confidenceBand.densityHigh * 100);
+        const earliestMin = Math.round((zone.confidenceBand.crossingSecEarliest - matchClockSec) / 60);
+        const latestMin = Math.round((zone.confidenceBand.crossingSecLatest - matchClockSec) / 60);
+        line += ` (likely ${lowPct}–${highPct}%, ${earliestMin}–${latestMin} min)`;
+      }
+      lines.push(line);
+    });
+  } else {
+    lines.push('', 'No high-density zones forecast.');
+  }
+
+  lines.push('', `**Staffing Deployment Advice:** ${forecast.staffingRecommendation}`);
+
+  if (forecast.prepositioning && forecast.prepositioning.length > 0) {
+    forecast.prepositioning.forEach((rec) => {
+      const label = RESPONDERS.find((r) => r.id === rec.responderId)?.label || rec.responderId;
+      lines.push(
+        rec.willArriveInTime
+          ? `- Move ${label} from ${rec.fromZone} to ${rec.toZone} — depart by ${formatTime(rec.recommendedDepartSec)}`
+          : `- Recommended: move ${label} from ${rec.fromZone} to ${rec.toZone} — unable to preposition in time`
+      );
+    });
+  }
+
+  return lines.join('\n');
+}
+
 export function Copilot() {
-  const state = useSimStore.getState();
-  
   // Simulation snapshot attributes required for grounding
   const density = useSimStore((s) => s.density || {});
   const incidents = useSimStore((s) => s.incidents || []);
@@ -26,28 +130,14 @@ export function Copilot() {
   const matchClockSec = useSimStore((s) => s.matchClockSec || 0);
   const timeline = useSimStore((s) => s.timeline || []);
 
-  // UI state
+  // Fix 3: a single scrollable chat thread (same Message shape/components as
+  // M2's Fan assistant panel) replaces the old two-mode brief/forecast state.
+  const [messages, setMessages] = useState<Message[]>([]);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [mode, setMode] = useState<'idle' | 'brief' | 'forecast'>('idle');
+  const [lastAction, setLastAction] = useState<{ kind: 'query'; text: string } | { kind: 'forecast' } | null>(null);
 
-  // Brief output state
-  const [brief, setBrief] = useState<{
-    summary: string;
-    topRisks: Array<{ description: string; zoneId?: string; priority: 1 | 2 | 3 }>;
-    recommendedActions: string[];
-  } | null>(null);
-
-  // Forecast output state
-  const [forecast, setForecast] = useState<{
-    peakAtSec: number;
-    topZones: Array<{ zoneId: string; density: number }>;
-    narrative: string;
-    staffingRecommendation: string;
-  } | null>(null);
-
-  // Helper to compile current store values into snapshot payload
   const getSnapshot = () => ({
     matchClockSec,
     density,
@@ -58,16 +148,23 @@ export function Copilot() {
     timeline,
   });
 
-  // Handle free-text query submit
+  const appendMessage = (role: Message['role'], content: string) => {
+    setMessages((prev) => [
+      ...prev,
+      { id: `${role}-${Date.now()}-${Math.random()}`, role, content, timestamp: new Date() },
+    ]);
+  };
+
   const handleQuerySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!query.trim()) return;
+    const trimmed = query.trim();
+    if (!trimmed) return;
 
-    setLoading(true);
     setError('');
-    setBrief(null);
-    setForecast(null);
-    setMode('brief');
+    setLastAction({ kind: 'query', text: trimmed });
+    appendMessage('user', trimmed);
+    setQuery('');
+    setLoading(true);
 
     try {
       const res = await fetch('/api/copilot', {
@@ -75,21 +172,17 @@ export function Copilot() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           type: 'brief',
-          query: query.trim(),
+          query: trimmed,
           simSnapshot: getSnapshot(),
         }),
       });
 
-      if (!res.ok) {
-        throw new Error(`HTTP error ${res.status}`);
-      }
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
 
       const data = await res.json();
-      if (data.error) {
-        throw new Error(data.error);
-      }
+      if (data.error) throw new Error(data.error);
 
-      setBrief(data);
+      appendMessage('assistant', formatBriefMessage(data));
     } catch (err: any) {
       console.error(err);
       setError(err.message || 'Failed to retrieve copilot brief.');
@@ -98,13 +191,13 @@ export function Copilot() {
     }
   };
 
-  // Handle 15-minute forecast generation
+  // Fix 1 + Fix 2: forecast is triggered from a small header icon button and
+  // injects its result into the same chat thread as a normal message.
   const handleForecastClick = async () => {
-    setLoading(true);
     setError('');
-    setBrief(null);
-    setForecast(null);
-    setMode('forecast');
+    setLastAction({ kind: 'forecast' });
+    appendMessage('user', 'Generate 15-Min Crowd Forecast');
+    setLoading(true);
 
     try {
       const res = await fetch('/api/copilot', {
@@ -116,16 +209,12 @@ export function Copilot() {
         }),
       });
 
-      if (!res.ok) {
-        throw new Error(`HTTP error ${res.status}`);
-      }
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
 
       const data = await res.json();
-      if (data.error) {
-        throw new Error(data.error);
-      }
+      if (data.error) throw new Error(data.error);
 
-      setForecast(data);
+      appendMessage('assistant', formatForecastMessage(data, matchClockSec));
     } catch (err: any) {
       console.error(err);
       setError(err.message || 'Failed to retrieve forecast brief.');
@@ -134,195 +223,95 @@ export function Copilot() {
     }
   };
 
-  const formatTime = (secs: number) => {
-    const m = Math.floor(secs / 60);
-    const s = secs % 60;
-    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  const handleRetry = () => {
+    if (!lastAction) return;
+    if (lastAction.kind === 'forecast') {
+      handleForecastClick();
+    } else {
+      setQuery(lastAction.text);
+    }
   };
 
-  return (
-    <div className="flex flex-col gap-4 h-full" data-testid="copilot-container">
-      {/* Action Controls Form */}
-      <form onSubmit={handleQuerySubmit} className="flex flex-col gap-2.5">
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Ask copilot: 'what are my biggest risks?'"
-            className="flex-1 px-3.5 py-2 rounded-xl border border-border bg-canvas text-xs focus:outline-none focus:ring-1 focus:ring-accent placeholder:text-text-secondary/70 text-text-primary"
-            disabled={loading}
-          />
-          <button
-            type="submit"
-            disabled={loading || !query.trim()}
-            data-testid="copilot-submit-btn"
-            className="p-2 rounded-xl bg-accent hover:bg-accent/95 text-white disabled:opacity-40 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
-            title="Submit query"
-          >
-            <Send className="w-4 h-4" />
-          </button>
-        </div>
+  const isEmpty = messages.length === 0;
 
+  return (
+    <div className="w-full h-full flex flex-col bg-surface border border-border rounded-2xl overflow-hidden shadow-sm" data-testid="copilot-container" role="region" aria-label="Operations Copilot">
+      {/* Header: title + small forecast icon button (Fix 1) */}
+      <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-border/60 shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="bg-purple-500/10 p-2 rounded-lg text-purple-600 shrink-0">
+            <Cpu className="w-4 h-4" />
+          </div>
+          <h3 className="font-display font-extrabold text-sm text-text-primary truncate">AI Operations Copilot</h3>
+        </div>
         <button
           type="button"
           onClick={handleForecastClick}
           disabled={loading}
           data-testid="copilot-forecast-btn"
-          className="w-full py-2 px-3 rounded-xl border border-blue-200 hover:border-blue-300 bg-blue-50/50 hover:bg-blue-50 text-blue-800 text-[11px] font-bold transition-all cursor-pointer flex items-center justify-center gap-2 select-none"
+          title="Generate 15-Min Crowd Forecast"
+          aria-label="Generate 15-Min Crowd Forecast"
+          className="p-2 rounded-xl border border-blue-200 hover:border-blue-300 bg-blue-50/50 hover:bg-blue-50 text-blue-700 disabled:opacity-40 transition-all cursor-pointer shrink-0"
         >
-          <Sparkles className="w-4 h-4 text-blue-600 shrink-0" />
-          Generate 15-Min Crowd Forecast
+          <Sparkles className="w-4 h-4" />
         </button>
-      </form>
+      </div>
 
-      {/* Loading Indicator */}
-      {loading && (
-        <div
-          className="flex flex-col items-center justify-center py-10 border border-dashed border-border bg-canvas/40 rounded-xl text-xs text-text-secondary gap-2 h-44"
-          data-testid="copilot-loading"
-        >
-          <Loader2 className="w-6 h-6 animate-spin text-accent" />
-          <span className="font-semibold text-[10px] uppercase tracking-wider text-text-secondary/80">Querying AI Auditor...</span>
-        </div>
-      )}
+      {/* Scrollable message thread (Fix 3) */}
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        {isEmpty && !loading ? (
+          <div className="flex-1 flex flex-col items-center justify-center p-6 text-center select-none">
+            <Sparkles className="w-6 h-6 text-accent/60 mb-2" />
+            <p className="text-xs text-text-secondary max-w-[220px]">
+              Ask the copilot about current risks, or generate a 15-min crowd forecast.
+            </p>
+          </div>
+        ) : (
+          <MessageList messages={messages} isThinking={loading} />
+        )}
+      </div>
 
-      {/* Error Alert Box */}
-      {error && !loading && (
+      {/* Inline error banner */}
+      {error && (
         <div
-          className="p-4 border border-red-200 bg-red-50/60 text-red-800 rounded-xl text-xs flex flex-col gap-1.5"
+          className="px-4 py-3 border-t border-red-100 bg-red-50/50 flex items-center justify-between text-xs text-red-700 animate-fadeIn shrink-0"
           data-testid="copilot-error"
         >
-          <div className="flex items-center gap-1.5 font-bold uppercase tracking-wide text-[9px] text-red-900">
-            <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
-            Copilot Connection Failure
+          <div className="flex items-center gap-2 min-w-0">
+            <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" />
+            <span className="truncate">{error}</span>
           </div>
-          <p className="font-medium text-red-950">{error}</p>
+          <button
+            type="button"
+            onClick={handleRetry}
+            className="flex items-center gap-1 font-semibold text-accent hover:text-accent-dark transition-colors px-2 py-1 rounded bg-accent/5 shrink-0"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            <span>Retry</span>
+          </button>
         </div>
       )}
 
-      {/* Brief Results Output */}
-      {mode === 'brief' && brief && !loading && !error && (
-        <div className="flex flex-col gap-4 overflow-y-auto max-h-[300px] pr-1 scrollbar-thin animate-fadeIn" data-testid="copilot-brief">
-          {/* Situation Summary */}
-          <div className="bg-canvas border border-border/60 rounded-xl p-3.5 text-xs flex flex-col gap-1.5">
-            <span className="text-[9px] font-bold text-text-secondary uppercase tracking-wider block">Operational Summary</span>
-            <p className="text-text-primary leading-relaxed font-medium">{brief.summary}</p>
-          </div>
-
-          {/* Top Prioritized Risks */}
-          {brief.topRisks && brief.topRisks.length > 0 && (
-            <div className="flex flex-col gap-2">
-              <span className="text-[9px] font-bold text-text-secondary uppercase tracking-wider block px-1">Prioritized Risks</span>
-              <div className="flex flex-col gap-2">
-                {brief.topRisks.map((risk, index) => {
-                  let badgeColor = '';
-                  let label = '';
-                  if (risk.priority === 1) {
-                    badgeColor = 'bg-red-100 text-red-800 border-red-200';
-                    label = 'High Priority';
-                  } else if (risk.priority === 2) {
-                    badgeColor = 'bg-yellow-100 text-yellow-800 border-yellow-200';
-                    label = 'Medium';
-                  } else {
-                    badgeColor = 'bg-blue-100 text-blue-800 border-blue-200';
-                    label = 'Low';
-                  }
-
-                  return (
-                    <div
-                      key={index}
-                      className="p-3 border border-border/80 rounded-xl bg-surface shadow-sm flex flex-col gap-1.5"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase border ${badgeColor}`}>
-                          {label}
-                        </span>
-                        {risk.zoneId && (
-                          <span className="text-[9px] font-bold text-text-secondary">
-                            Zone: <span className="text-text-primary font-extrabold">{risk.zoneId}</span>
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs font-semibold text-text-primary">"{risk.description}"</p>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Recommended Operator Action Items */}
-          {brief.recommendedActions && brief.recommendedActions.length > 0 && (
-            <div className="flex flex-col gap-2 bg-slate-50/50 border border-border rounded-xl p-3.5 text-xs">
-              <span className="text-[9px] font-bold text-text-secondary uppercase tracking-wider block">Recommended Dispatch Actions</span>
-              <ul className="flex flex-col gap-1.5 mt-0.5">
-                {brief.recommendedActions.map((act, index) => (
-                  <li key={index} className="flex items-start gap-1.5 text-text-primary text-[11px] font-medium leading-normal">
-                    <Compass className="w-3.5 h-3.5 text-accent shrink-0 mt-0.5" />
-                    <span>{act}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Forecast Results Output */}
-      {mode === 'forecast' && forecast && !loading && !error && (
-        <div className="flex flex-col gap-4 overflow-y-auto max-h-[300px] pr-1 scrollbar-thin animate-fadeIn" data-testid="copilot-forecast">
-          {/* Predictive Narrative */}
-          <div className="bg-blue-50/20 border border-blue-200/80 rounded-xl p-3.5 text-xs flex flex-col gap-1.5">
-            <span className="text-[9px] font-bold text-blue-800 uppercase tracking-wider flex items-center gap-1">
-              <Sparkles className="w-3.5 h-3.5" />
-              AI Narrative Explanation
-            </span>
-            <p className="text-blue-950 font-medium leading-relaxed">{forecast.narrative}</p>
-          </div>
-
-          {/* Peak calculations */}
-          <div className="p-3.5 border border-border/80 rounded-xl bg-surface shadow-sm flex flex-col gap-2.5">
-            <div className="flex items-center justify-between border-b border-border/40 pb-2">
-              <span className="text-[9px] font-bold text-text-secondary uppercase tracking-wider block">Predicted Peak Time</span>
-              <span className="text-xs font-bold text-text-primary flex items-center gap-1">
-                <Compass className="w-3.5 h-3.5 text-accent" />
-                Clock {formatTime(forecast.peakAtSec)}
-              </span>
-            </div>
-            
-            <div>
-              <span className="text-[9px] font-bold text-text-secondary uppercase tracking-wider block mb-1.5 px-0.5">Peak Density Areas</span>
-              {forecast.topZones && forecast.topZones.length > 0 ? (
-                <div className="flex flex-col gap-1.5">
-                  {forecast.topZones.map((zone, idx) => (
-                    <div key={idx} className="flex items-center justify-between text-xs font-medium border-b border-border/40 pb-1.5 last:border-0 last:pb-0">
-                      <span className="text-text-primary font-bold">{zone.zoneId}</span>
-                      <span className={`font-bold px-1.5 py-0.5 rounded text-[10px] ${
-                        zone.density >= 0.75
-                          ? 'bg-red-100 text-red-800 font-extrabold'
-                          : zone.density >= 0.5
-                          ? 'bg-yellow-100 text-yellow-800'
-                          : 'bg-green-100 text-green-800'
-                      }`}>
-                        {Math.round(zone.density * 100)}% Density
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-[10px] text-text-secondary italic">No high-density zones forecast.</p>
-              )}
-            </div>
-          </div>
-
-          {/* Staffing Recommendation */}
-          <div className="bg-canvas border border-border/60 rounded-xl p-3.5 text-xs flex flex-col gap-1.5">
-            <span className="text-[9px] font-bold text-text-secondary uppercase tracking-wider block">Staffing Deployment Advice</span>
-            <p className="text-text-primary leading-relaxed font-semibold">{forecast.staffingRecommendation}</p>
-          </div>
-        </div>
-      )}
+      {/* Input footer (fixed, Fix 3) */}
+      <form onSubmit={handleQuerySubmit} className="p-3 bg-canvas/20 border-t border-border/80 flex gap-2 shrink-0">
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Ask copilot: 'what are my biggest risks?'"
+          className="flex-1 px-3.5 py-2 rounded-xl border border-border bg-canvas text-xs focus:outline-none focus:ring-1 focus:ring-accent placeholder:text-text-secondary/70 text-text-primary"
+          disabled={loading}
+        />
+        <button
+          type="submit"
+          disabled={loading || !query.trim()}
+          data-testid="copilot-submit-btn"
+          className="p-2 rounded-xl bg-accent hover:bg-accent/95 text-white disabled:opacity-40 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
+          title="Submit query"
+        >
+          <Send className="w-4 h-4" />
+        </button>
+      </form>
     </div>
   );
 }

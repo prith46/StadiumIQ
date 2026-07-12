@@ -59,19 +59,25 @@ describe('AI Agentic Planners', () => {
     expect(response.alertLevel).toBe('none');
   });
 
-  // 2. Malformed JSON triggers FALLBACK_RESPONSE (deep-equal for an English fan)
-  it('malformed JSON response triggers FALLBACK_RESPONSE exactly', async () => {
+  // 2. Plain-text (non-JSON) model output is wrapped as the message rather than
+  // discarded for the generic FALLBACK_RESPONSE — the fan still gets a real
+  // reply (M2 item 7b: graceful degradation, not an error).
+  it('wraps plain conversational (non-JSON) model text as the message instead of using the generic fallback', async () => {
     mockChat.mockResolvedValueOnce({
       text: 'This is not a JSON object',
       toolCalls: [],
     });
 
     const response = await runFanAssistant('hello', fanContext, ctx);
-    expect(response).toEqual(FALLBACK_RESPONSE);
+    expect(response.message).toBe('This is not a JSON object');
+    expect(response.language).toBe('en');
+    expect(response.mapActions).toEqual([]);
+    expect(response.alertLevel).toBe('none');
+    expect(response).not.toEqual(FALLBACK_RESPONSE);
   });
 
-  // 2b. Fallback language is taken from fanContext when known (non-English fan)
-  it('fallback uses fanContext.language when the model output is malformed', async () => {
+  // 2b. Fallback language is taken from fanContext when the wrapped text has no language of its own
+  it('wrapped plain-text fallback uses fanContext.language (non-English fan)', async () => {
     mockChat.mockResolvedValueOnce({
       text: 'still not JSON',
       toolCalls: [],
@@ -79,8 +85,54 @@ describe('AI Agentic Planners', () => {
 
     const esFan: FanContext = { language: 'es', accessibility: false };
     const response = await runFanAssistant('hola', esFan, ctx);
-    expect(response.message).toBe(FALLBACK_RESPONSE.message);
+    expect(response.message).toBe('still not JSON');
     expect(response.language).toBe('es');
+  });
+
+  // 2c. Truly empty model output (nothing to wrap) is the only case that still
+  // uses the generic FALLBACK_RESPONSE.
+  it('uses the generic FALLBACK_RESPONSE only when the model returns no text at all', async () => {
+    mockChat.mockResolvedValueOnce({
+      text: '',
+      toolCalls: [],
+    });
+
+    const response = await runFanAssistant('hello', fanContext, ctx);
+    expect(response).toEqual(FALLBACK_RESPONSE);
+  });
+
+  // 2d. JSON object missing/mistyping required fields still salvages `message`
+  // and backfills sensible defaults, rather than discarding the whole reply.
+  it('salvages message and backfills defaults when the JSON is missing required fields', async () => {
+    mockChat.mockResolvedValueOnce({
+      // language, mapActions, alertLevel are all missing — fails Zod validation
+      text: JSON.stringify({ message: "Here's the nearest restroom." }),
+      toolCalls: [],
+    });
+
+    const response = await runFanAssistant('where is the restroom', fanContext, ctx);
+    expect(response.message).toBe("Here's the nearest restroom.");
+    expect(response.language).toBe('en');
+    expect(response.mapActions).toEqual([]);
+    expect(response.alertLevel).toBe('none');
+  });
+
+  // 2e. A malformed mapActions entry is dropped rather than invalidating the
+  // entire response.
+  it('drops malformed mapActions entries but keeps the salvaged message', async () => {
+    mockChat.mockResolvedValueOnce({
+      text: JSON.stringify({
+        message: 'Routing you now.',
+        language: 'en',
+        mapActions: [{ op: 'not-a-real-op' }, { op: 'highlight', zoneId: 'gate-a' }],
+        alertLevel: 'none',
+      }),
+      toolCalls: [],
+    });
+
+    const response = await runFanAssistant('take me to the gate', fanContext, ctx);
+    expect(response.message).toBe('Routing you now.');
+    expect(response.mapActions).toEqual([{ op: 'highlight', zoneId: 'gate-a', path: undefined }]);
   });
 
   // 3. User stress keyword override forces warn/critical alertLevel and meta.stress=true

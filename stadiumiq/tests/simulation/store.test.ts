@@ -221,20 +221,23 @@ describe('Zustand Simulation Store', () => {
   });
 
   // 9. SOS activation and BroadcastChannel synchronization
-  it('triggers SOS and broadcasts the trigger message to other tabs', () => {
+  it('triggers SOS for fan (creates incident only) and does not set global active state', () => {
     const store = useSimStore.getState();
     store.startEngine(mockZones);
 
     // Initial state
     expect(useSimStore.getState().sos?.active).toBe(false);
 
-    // Trigger SOS locally
+    // Set fan location first so incident can be reported
+    store.setFanLocation('sec-101');
+
+    // Trigger SOS locally as fan
     store.triggerSos('fan');
 
     const state = useSimStore.getState();
-    expect(state.sos?.active).toBe(true);
-    expect(state.sos?.triggeredBy).toBe('fan');
-    expect(state.sos?.triggeredAtSec).toBe(MATCH_START_SEC);
+    expect(state.sos?.active).toBe(false);
+    expect(state.incidents.length).toBeGreaterThan(0);
+    expect(state.incidents[0].type).toBe('medical');
   });
 
   it('clears SOS and broadcasts the clear message to other tabs', () => {
@@ -249,5 +252,99 @@ describe('Zustand Simulation Store', () => {
     const state = useSimStore.getState();
     expect(state.sos?.active).toBe(false);
     expect(state.sos?.triggeredBy).toBeNull();
+  });
+
+  // Fix 2: manual density overrides decay during sequencer tick
+  it('decays manual overrides during sequencer tick', () => {
+    const store = useSimStore.getState();
+    store.reset(mockZones);
+
+    // Start auto sequencer
+    store.startAutoSequencer(mockZones);
+
+    // Apply manual override
+    store.applyScenario({ density: { 'sec-101': 0.95 } });
+    expect(useSimStore.getState().manualDensityOverrides['sec-101'].value).toBe(0.95);
+
+    // Advance fake timers by 35 seconds (35000ms) to let decay progress (30s hold + 5s decay)
+    vi.advanceTimersByTime(35000);
+
+    // Verification: auto sequencer should interpolate the value (decaying toward auto value, not snapped to auto yet)
+    expect(useSimStore.getState().density['sec-101']).toBeLessThan(0.95);
+    expect(useSimStore.getState().density['sec-101']).toBeGreaterThan(0);
+
+    // Advance past the 50-second total window (e.g. 16 more seconds)
+    vi.advanceTimersByTime(16000);
+
+    // Overrides should be cleared and resolve to autoComputedValue exactly
+    expect(useSimStore.getState().manualDensityOverrides['sec-101']).toBeUndefined();
+  });
+
+  // Fix 3: judge upload merges overrides
+  it('merges judge upload dataset into manual overrides', () => {
+    const store = useSimStore.getState();
+    store.reset(mockZones);
+
+    store.importDataset({
+      density: { 'sec-101': 0.77 },
+      gateStatus: { 'gate-a': 'closed' }
+    });
+
+    expect(useSimStore.getState().manualDensityOverrides['sec-101'].value).toBe(0.77);
+    expect(useSimStore.getState().manualGateStatusOverrides['gate-a'].value).toBe('closed');
+  });
+
+  // Fix 4: STATE_SYNC isolates fan personal SOS
+  it('does not propagate fan personal SOS via STATE_SYNC', () => {
+    const store = useSimStore.getState();
+    store.startEngine(mockZones);
+
+    // Simulate receiving STATE_SYNC with fan personal SOS
+    const bc = MockBroadcastChannel.instances[0];
+    expect(bc).toBeDefined();
+
+    // Trigger message event manually
+    bc.onmessage?.({
+      data: {
+        type: 'STATE_SYNC',
+        payload: {
+          matchClockSec: 100,
+          density: {},
+          gateStatus: {},
+          incidents: [],
+          routedLoad: {},
+          sensorCounts: {},
+          timeline: [],
+          sos: { active: true, triggeredBy: 'fan', triggeredAtSec: 100 }
+        },
+        senderId: 'other-tab',
+        timestamp: Date.now()
+      }
+    } as MessageEvent);
+
+    // Expect local SOS to remain inactive (isolated)
+    expect(useSimStore.getState().sos?.active).toBe(false);
+
+    // Simulate receiving STATE_SYNC with organizer SOS
+    bc.onmessage?.({
+      data: {
+        type: 'STATE_SYNC',
+        payload: {
+          matchClockSec: 100,
+          density: {},
+          gateStatus: {},
+          incidents: [],
+          routedLoad: {},
+          sensorCounts: {},
+          timeline: [],
+          sos: { active: true, triggeredBy: 'organizer', triggeredAtSec: 100 }
+        },
+        senderId: 'other-tab',
+        timestamp: Date.now()
+      }
+    } as MessageEvent);
+
+    // Expect local SOS to become active for organizer emergency
+    expect(useSimStore.getState().sos?.active).toBe(true);
   });
 });

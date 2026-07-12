@@ -13,6 +13,7 @@ import { useA11yStore } from '../../lib/store/a11yStore';
 import { speak, stopSpeaking } from '../../lib/voice/speechSynthesis';
 import { toSpeechLocaleTag } from '../../lib/voice/languageTags';
 import { evaluateStressEscalation } from '../../lib/engine/stressEscalation';
+import { useChatStore } from '../../lib/store/chatStore';
 
 interface AssistantPanelProps {
   mapRef: RefObject<StadiumMapHandle | null>;
@@ -27,7 +28,8 @@ export function AssistantPanel({
   onTicketScanRequest,
   onCameraRequest,
 }: AssistantPanelProps) {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const messages = useChatStore((s) => s.messages);
+  const setMessages = useChatStore((s) => s.setMessages);
   const [isThinking, setIsThinking] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [lastUserMessageText, setLastUserMessageText] = useState<string | null>(null);
@@ -278,9 +280,6 @@ export function AssistantPanel({
 
       {/* Input container footer */}
       <div className="p-3 bg-canvas/20 border-t border-border/80 flex flex-col gap-2">
-        {!isEmpty && !isCalmMode && (
-          <QuickActionChips onSelect={(text) => handleSendMessage(text)} disabled={isThinking || sosActive} />
-        )}
         {isCalmMode && (
           <div className="px-3 py-2 bg-teal-50 border border-teal-200 text-teal-800 text-xs rounded-xl flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-teal-500 animate-pulse shrink-0" />

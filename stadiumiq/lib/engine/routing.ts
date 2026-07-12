@@ -80,10 +80,10 @@ export interface RouteResult {
      */
     crowdedZones: string[];
     /**
-     * Gate ids that were on the *alternative* path but bypassed.
+     * Gates that were on the *alternative* path but bypassed.
      * Empty when no trade-off occurred.
      */
-    avoidedGates: string[];
+    avoidedGates: Array<{ gateId: string; cause: 'congested' | 'closed' }>;
     /** Mirrors top-level etaSec (structured for LLM phrasing convenience). */
     etaSec: number;
   };
@@ -94,7 +94,7 @@ export interface RouteResult {
 export interface AccessibleRouteResult {
   path: string[] | null;
   etaSec: number | null;
-  reason: { crowdedZones: string[]; avoidedGates: string[] };
+  reason: { crowdedZones: string[]; avoidedGates: Array<{ gateId: string; cause: 'congested' | 'closed' }> };
   accessible: boolean;
   noRouteFound?: boolean;
 }
@@ -448,15 +448,16 @@ export function computeRoute(
   // we need to check if congestion caused us to deviate from the naive shortest path,
   // which means the avoided congested zone may NOT be on the chosen path at all.
   let crowdedZones: string[] = [];
-  let avoidedGates: string[] = [];
+  let avoidedGates: Array<{ gateId: string; cause: 'congested' | 'closed' }> = [];
 
   const anyCongestion =
     Object.values(density).some((d) => d > CONGESTION_THRESHOLD) ||
-    Object.values(routedLoad).some((load) => load > 0);
+    Object.values(routedLoad).some((load) => load > 0) ||
+    Object.values(gateStatus).some((status) => status === 'closed' || status === 'congested');
 
   if (anyCongestion) {
     // Build an unweighted (base-only) graph to find naive shortest path
-    const naiveGraph = buildGraph(edges, zones, filters, gateStatus, {}, {});
+    const naiveGraph = buildGraph(edges, zones, filters, {}, {}, {});
     const naive = dijkstra(naiveGraph, originZoneId, destinationZoneId);
 
     if (naive.path && naive.path.join(',') !== primaryPath.join(',')) {
@@ -466,9 +467,37 @@ export function computeRoute(
       crowdedZones = naive.path.filter(
         (id) => !primarySet.has(id) && (density[id] ?? 0) > CONGESTION_THRESHOLD
       );
-      avoidedGates = naive.path.filter(
-        (id) => !primarySet.has(id) && isGateId(id)
-      );
+      avoidedGates = naive.path
+        .filter((id) => !primarySet.has(id) && isGateId(id))
+        .map((id) => {
+          const cause = gateStatus[id] === 'closed' ? 'closed' : 'congested';
+          return { gateId: id, cause };
+        });
+    }
+  }
+
+  // --- Closed-exit reasoning (Fix Batch H-2) ---
+  // When the destination itself is a gate/exit, other closed gates are exits
+  // the fan was steered away from. Those closed gates are candidate
+  // *destinations* excluded during nearest-exit resolution (see
+  // destinationResolver.ts `nearestExit`) — they are never waypoints on the
+  // path TO the chosen gate, so the naive-vs-primary path diff above can never
+  // surface them, and `avoidedGates` came back empty in exactly the reported
+  // "3 gates closed, forced through the 4th" scenario. Add them explicitly
+  // (deduped, sorted for determinism) so the route explanation can state WHY
+  // this exit was chosen. Scoped to gate destinations so amenity/zone routes
+  // aren't polluted with unrelated closure noise.
+  if (isGateId(destinationZoneId)) {
+    const alreadyListed = new Set(avoidedGates.map((g) => g.gateId));
+    const closedExits = Object.entries(gateStatus)
+      .filter(
+        ([gateId, status]) =>
+          status === 'closed' && gateId !== destinationZoneId && !alreadyListed.has(gateId)
+      )
+      .map(([gateId]) => gateId)
+      .sort();
+    for (const gateId of closedExits) {
+      avoidedGates.push({ gateId, cause: 'closed' });
     }
   }
 

@@ -33,6 +33,46 @@ describe("SpeechRecognition API Wrapper", () => {
     expect(recognizer).toBeNull();
   });
 
+  it("accumulates finalized transcript across pauses instead of discarding it (Fix 6)", () => {
+    let onresultCallback: (event: any) => void = () => {};
+
+    function mockResult(transcript: string, isFinal: boolean) {
+      return Object.assign([{ transcript }], { isFinal });
+    }
+
+    const MockSpeechRecognition = vi.fn().mockImplementation(function () {
+      return {
+        start: vi.fn(),
+        stop: vi.fn(),
+        continuous: false,
+        interimResults: false,
+        lang: "",
+        set onresult(cb: any) {
+          onresultCallback = cb;
+        },
+      };
+    });
+    vi.stubGlobal("SpeechRecognition", MockSpeechRecognition);
+
+    const onResult = vi.fn();
+    createSpeechRecognizer("en-US", onResult, vi.fn());
+
+    // First utterance finalizes at index 0 ("hello ").
+    onresultCallback({
+      resultIndex: 0,
+      results: [mockResult("hello ", true)],
+    });
+    expect(onResult).toHaveBeenLastCalledWith({ transcript: "hello", isFinal: true });
+
+    // User pauses, then starts a new phrase — the browser only reports the
+    // NEW result (index 1) since index 0 is already final and won't repeat.
+    onresultCallback({
+      resultIndex: 1,
+      results: [mockResult("hello ", true), mockResult("world", false)],
+    });
+    expect(onResult).toHaveBeenLastCalledWith({ transcript: "hello world", isFinal: false });
+  });
+
   it("initializes, starts, and stops the mocked SpeechRecognition API correctly", () => {
     const mockStart = vi.fn();
     const mockStop = vi.fn();
@@ -154,6 +194,43 @@ describe("VoiceInputButton Component Tests", () => {
 
     // Stop listening
     fireEvent.click(btn);
+    expect(mockStop).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Listening...")).toBeNull();
+  });
+
+  it("stops listening automatically once a final transcript is received (Fix 5)", () => {
+    let onresultCallback: (event: any) => void = () => {};
+    const mockStart = vi.fn();
+    const mockStop = vi.fn();
+
+    const MockSpeechRecognition = vi.fn().mockImplementation(function () {
+      return {
+        start: mockStart,
+        stop: mockStop,
+        continuous: true,
+        interimResults: true,
+        set onresult(cb: any) {
+          onresultCallback = cb;
+        },
+      };
+    });
+    vi.stubGlobal("SpeechRecognition", MockSpeechRecognition);
+
+    render(<VoiceInputButton onTranscript={vi.fn()} />);
+    const btn = screen.getByRole("button", { name: /voice input/i });
+
+    fireEvent.click(btn);
+    expect(mockStart).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Listening...")).toBeInTheDocument();
+
+    // Simulate a finalized transcript event from the browser.
+    act(() => {
+      onresultCallback({
+        resultIndex: 0,
+        results: [Object.assign([{ transcript: "book me a taxi" }], { isFinal: true })],
+      });
+    });
+
     expect(mockStop).toHaveBeenCalledTimes(1);
     expect(screen.queryByText("Listening...")).toBeNull();
   });

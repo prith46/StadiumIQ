@@ -133,7 +133,7 @@ export function DispatchQueue() {
   });
 
   return (
-    <div className="flex flex-col gap-4 h-full" data-testid="dispatch-queue-container">
+    <div className="flex flex-col gap-4 h-full" data-testid="dispatch-queue-container" role="region" aria-label="Dispatch Queue">
       {sortedIncidents.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-10 px-4 border border-dashed border-border rounded-xl bg-canvas text-xs text-text-secondary text-center select-none h-44">
           <p className="font-semibold text-green-700" data-testid="dispatch-empty-state">No incidents in dispatch queue</p>
@@ -193,20 +193,27 @@ export function DispatchQueue() {
 
                 {/* 3. Dispatch & Responder Status Details */}
                 {inc.status === 'dispatched' && (
-                  <div className="grid grid-cols-2 gap-3 bg-canvas border border-border/40 rounded-lg p-2.5 text-xs">
-                    <div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-canvas border border-border/40 rounded-lg p-2.5 text-xs">
+                    <div className="min-w-0">
                       <span className="text-[9px] text-text-secondary block uppercase font-bold tracking-wider">Responder</span>
-                      <span className="font-bold text-text-primary flex items-center gap-1">
-                        <UserCheck className="w-3.5 h-3.5 text-blue-600" />
-                        {responder?.label || inc.responderId}
+                      <span className="font-bold text-text-primary flex items-center gap-1.5 min-w-0">
+                        <UserCheck className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                        <span className="truncate">{responder?.label || inc.responderId}</span>
                       </span>
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <span className="text-[9px] text-text-secondary block uppercase font-bold tracking-wider">ETA</span>
-                      <span className={`font-bold flex items-center gap-1 ${isBreached ? 'text-red-600' : 'text-green-600'}`}>
-                        <Clock className="w-3.5 h-3.5" />
-                        {inc.etaSec} seconds {isBreached && <span className="text-[9px] uppercase px-1 py-0.5 bg-red-100 rounded text-red-700 font-bold ml-1">SLA Breach</span>}
-                      </span>
+                      <div className={`font-bold flex flex-wrap items-center gap-x-1.5 gap-y-1 ${isBreached ? 'text-red-600' : 'text-green-600'}`}>
+                        <span className="flex items-center gap-1 shrink-0">
+                          <Clock className="w-3.5 h-3.5 shrink-0" />
+                          {inc.etaSec}s
+                        </span>
+                        {isBreached && (
+                          <span className="text-[9px] uppercase px-1.5 py-0.5 bg-red-100 rounded text-red-700 font-bold whitespace-nowrap">
+                            SLA Breach
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}

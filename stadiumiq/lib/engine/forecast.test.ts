@@ -55,9 +55,9 @@ describe('Predictive Crowd Forecasting (M7)', () => {
       // lerp(0.2, 0.8, 0.5) = 0.5
       // lerp(0.4, 0.6, 0.5) = 0.5
       // lerp(0.1, 0.1, 0.5) = 0.1
-      expect(result.density['zone-a']).toBeCloseTo(0.5, 5);
-      expect(result.density['zone-b']).toBeCloseTo(0.5, 5);
-      expect(result.density['zone-c']).toBeCloseTo(0.1, 5);
+      expect(result.density!['zone-a']).toBeCloseTo(0.5, 5);
+      expect(result.density!['zone-b']).toBeCloseTo(0.5, 5);
+      expect(result.density!['zone-c']).toBeCloseTo(0.1, 5);
     });
 
     it('non-midpoint interpolation math check', () => {
@@ -69,9 +69,9 @@ describe('Predictive Crowd Forecasting (M7)', () => {
       // lerp(0.2, 0.8, 0.25) = 0.2 + 0.6 * 0.25 = 0.35
       // lerp(0.4, 0.6, 0.25) = 0.4 + 0.2 * 0.25 = 0.45
       // lerp(0.1, 0.1, 0.25) = 0.1
-      expect(result.density['zone-a']).toBeCloseTo(0.35, 5);
-      expect(result.density['zone-b']).toBeCloseTo(0.45, 5);
-      expect(result.density['zone-c']).toBeCloseTo(0.1, 5);
+      expect(result.density!['zone-a']).toBeCloseTo(0.35, 5);
+      expect(result.density!['zone-b']).toBeCloseTo(0.45, 5);
+      expect(result.density!['zone-c']).toBeCloseTo(0.1, 5);
     });
 
     it('aheadSec beyond timeline horizon returns last frame with extrapolated: true', () => {

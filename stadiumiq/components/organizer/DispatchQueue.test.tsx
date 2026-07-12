@@ -69,6 +69,37 @@ describe('DispatchQueue Component', () => {
     expect(storeIncidents[0].etaSec).toBeDefined();
   });
 
+  it('renders the SLA Breach badge fully intact (not clipped) alongside ETA and responder info (M16 item 11)', () => {
+    useSimStore.setState({
+      incidents: [
+        {
+          id: 'inc-breach',
+          type: 'medical',
+          zoneId: 'sec-105',
+          note: 'Medical issue in lower tier',
+          status: 'dispatched',
+          createdAt: 200,
+          responderId: 'resp-med-1',
+          etaSec: 400, // > 300s SLA threshold — must trigger the breach badge
+        },
+      ],
+    });
+
+    render(<DispatchQueue />);
+
+    // The full, untruncated badge text must be present as a single text node
+    // — a truncated render (the reported "SLA BREA[CH]" bug) would fail this.
+    const breachBadge = screen.getByText('SLA Breach');
+    expect(breachBadge).toBeInTheDocument();
+    // Must not be allowed to wrap/clip mid-word.
+    expect(breachBadge.className).toContain('whitespace-nowrap');
+
+    // ETA value and responder name must both still be present and legible
+    // (not overlapping/replaced by the badge).
+    expect(screen.getByText('400s')).toBeInTheDocument();
+    expect(screen.getByText('Medical Team Alpha')).toBeInTheDocument();
+  });
+
   it('handles resolved incident transition and fetches LLM report summary', async () => {
     useSimStore.setState({
       incidents: [

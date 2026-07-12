@@ -7,7 +7,12 @@ export type ChannelMessage =
   | { type: 'RESET'; senderId: string; timestamp: number }
   | { type: 'IMPORT'; dataset: UploadDataset; senderId: string; timestamp: number }
   | { type: 'sos_trigger'; triggeredBy: 'fan' | 'organizer'; atSec: number; senderId: string; timestamp: number }
-  | { type: 'sos_clear'; triggeredBy: 'fan' | 'organizer'; atSec: number; senderId: string; timestamp: number };
+  | { type: 'sos_clear'; triggeredBy: 'fan' | 'organizer'; atSec: number; senderId: string; timestamp: number }
+  // M29: broadcast ONCE per session by whichever tab starts it — every other
+  // tab adopts this seed + start time and independently (re-)derives the
+  // identical sequencer state via `computeSequencerState`, rather than this
+  // message being repeated per tick. See docs/match-sequencer.md.
+  | { type: 'SEQUENCER_INIT'; seed: number; sessionStartedAtMs: number; senderId: string; timestamp: number };
 
 export const CHANNEL_NAME = 'stadiumiq';
 
@@ -27,12 +32,8 @@ export function createSimChannel(
     
     channel.onmessage = (event) => {
       const msg = event.data;
-      if (
-        msg &&
-        typeof msg === 'object' &&
-        ['STATE_SYNC', 'HEARTBEAT', 'SCENARIO', 'RESET', 'IMPORT', 'sos_trigger', 'sos_clear'].includes(msg.type)
-      ) {
-        onMessage(msg as ChannelMessage);
+      if (isValidChannelMessage(msg)) {
+        onMessage(msg);
       }
     };
 
@@ -60,5 +61,31 @@ export function createSimChannel(
       post: () => {},
       close: () => {},
     };
+  }
+}
+
+function isValidChannelMessage(msg: any): msg is ChannelMessage {
+  if (!msg || typeof msg !== 'object') return false;
+  if (typeof msg.type !== 'string') return false;
+  if (typeof msg.timestamp !== 'number') return false;
+
+  switch (msg.type) {
+    case 'STATE_SYNC':
+      return typeof msg.senderId === 'string' && msg.payload && typeof msg.payload === 'object' && typeof msg.payload.matchClockSec === 'number';
+    case 'HEARTBEAT':
+      return typeof msg.zoneId === 'string' && typeof msg.sessionId === 'string';
+    case 'SCENARIO':
+      return typeof msg.senderId === 'string' && msg.patch && typeof msg.patch === 'object';
+    case 'RESET':
+      return typeof msg.senderId === 'string';
+    case 'IMPORT':
+      return typeof msg.senderId === 'string' && msg.dataset && typeof msg.dataset === 'object';
+    case 'sos_trigger':
+    case 'sos_clear':
+      return typeof msg.senderId === 'string' && (msg.triggeredBy === 'fan' || msg.triggeredBy === 'organizer') && typeof msg.atSec === 'number';
+    case 'SEQUENCER_INIT':
+      return typeof msg.senderId === 'string' && typeof msg.seed === 'number' && typeof msg.sessionStartedAtMs === 'number';
+    default:
+      return false;
   }
 }

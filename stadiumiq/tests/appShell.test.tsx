@@ -14,7 +14,6 @@ describe("StadiumIQ App Shell & Accessibility Controls", () => {
     // Reset Zustand stores
     useRoleStore.setState({ role: "fan" })
     useA11yStore.setState({
-      highContrast: false,
       fontScale: 1,
       ttsEnabled: false,
     })
@@ -65,16 +64,7 @@ describe("StadiumIQ App Shell & Accessibility Controls", () => {
     expect(organizerBtn).toHaveFocus()
   })
 
-  // 3. Clicking the high-contrast button in A11yControls adds the high-contrast class to document.documentElement
-  it("Clicking the high-contrast button in A11yControls adds the high-contrast class to document.documentElement", () => {
-    render(<A11yControls />)
-    const toggleBtn = screen.getByRole("button", { name: /toggle high contrast/i })
-    expect(document.documentElement.classList.contains("high-contrast")).toBe(false)
-    fireEvent.click(toggleBtn)
-    expect(document.documentElement.classList.contains("high-contrast")).toBe(true)
-  })
-
-  // 4. Clicking a font-scale button updates the --font-scale CSS variable on document.documentElement
+  // 3. Clicking a font-scale button updates the --font-scale CSS variable on document.documentElement
   it("Clicking a font-scale button updates the --font-scale CSS variable on document.documentElement", () => {
     render(<A11yControls />)
     // Effect reflects the default scale onto the document root on mount.
