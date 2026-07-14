@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { createClient } from '@/lib/ai/client';
+import { parseLlmJson } from '@/lib/ai/parseLlmJson';
+import { simSnapshotSchema } from '@/lib/validation/simSnapshot';
+import { allowRequest } from '@/lib/server/rateLimit';
+import { readJsonBody } from '@/lib/server/readJsonBody';
 import { aggregateDebriefData, DebriefInput } from '@/lib/engine/debriefData';
 import { matchPhase } from '@/lib/simulation/engine';
 import { EDGES } from '@/lib/venue/venue';
@@ -8,17 +12,13 @@ import type { SimState } from '@/lib/types';
 
 // Same server-side-key pattern and input-validation/defense-in-depth as
 // /api/copilot, even though this route takes no free-text user input.
+// Hard body cap, enforced while streaming — the debrief reads the full
+// timeline history, same budget as /api/copilot.
+const BODY_MAX_BYTES = 2 * 1024 * 1024;
+
 const requestSchema = z.object({
-  sequencerPhase: z.string().nullable().optional(),
-  simSnapshot: z.object({
-    matchClockSec: z.number(),
-    density: z.record(z.string(), z.number()),
-    gateStatus: z.record(z.string(), z.enum(['open', 'congested', 'closed'])),
-    incidents: z.array(z.any()),
-    routedLoad: z.record(z.string(), z.number()),
-    sensorCounts: z.record(z.string(), z.number()),
-    timeline: z.array(z.any()).optional(),
-  }),
+  sequencerPhase: z.string().max(40).nullable().optional(),
+  simSnapshot: simSnapshotSchema,
 }).strict();
 
 function buildFallbackReport(data: DebriefInput): string {
@@ -55,14 +55,18 @@ function buildFallbackReport(data: DebriefInput): string {
 }
 
 export async function POST(req: Request) {
-  let body: any;
-  try {
-    body = await req.json();
-  } catch (err) {
-    return NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 });
+  if (!allowRequest('debrief', req)) {
+    return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
   }
 
-  const result = requestSchema.safeParse(body);
+  const read = await readJsonBody(req, BODY_MAX_BYTES);
+  if (!read.ok) {
+    return read.reason === 'too_large'
+      ? NextResponse.json({ error: 'Payload too large' }, { status: 413 })
+      : NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 });
+  }
+
+  const result = requestSchema.safeParse(read.body);
   if (!result.success) {
     return NextResponse.json({ error: 'Invalid request payload' }, { status: 400 });
   }
@@ -93,7 +97,7 @@ export async function POST(req: Request) {
   const debriefData = aggregateDebriefData(state, EDGES);
 
   const systemPrompt =
-    'You are the MetLife Stadium AI Ops Assistant generating a one-shot post-event debrief report.\n' +
+    'You are the StadiumIQ AI Ops Assistant for MetLife Stadium, generating a one-shot post-event debrief report.\n' +
     'Using ONLY the grounding data provided (never invent numbers), write a structured report covering:\n' +
     '1. A brief summary paragraph of the session.\n' +
     '2. The top bottlenecks: for each, its peak density, its real root-cause chain, and a concrete suggestion for what would have prevented it.\n' +
@@ -113,12 +117,7 @@ export async function POST(req: Request) {
       []
     );
 
-    let text = (chatResult.text || '').trim();
-    if (text.startsWith('```')) {
-      text = text.replace(/^```[a-zA-Z]*\n/, '').replace(/\n```$/, '').trim();
-    }
-
-    const parsed = JSON.parse(text);
+    const parsed = parseLlmJson(chatResult.text) as { report?: unknown };
     if (!parsed.report || typeof parsed.report !== 'string') {
       throw new Error('Malformed JSON structure');
     }

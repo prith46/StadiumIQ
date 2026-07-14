@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { ZONES } from "@/lib/venue/venue";
 import { useSimStore } from "@/lib/store/simStore";
 import { Button } from "@/components/ui/button";
@@ -9,9 +9,12 @@ import { Button } from "@/components/ui/button";
 // the only piece of that page that's an actual operational tool (manual
 // density overrides for demoing/testing); the rest of that page was
 // StadiumMap ref-API scratch tooling and was removed, not duplicated.
-export function MapSettingsSimPanel() {
+// memo(): no props, self-subscribed to its own store slices — the parent
+// Dashboard re-renders every 1s for its clock display and must not cascade here.
+export const MapSettingsSimPanel = React.memo(MapSettingsSimPanelComponent);
+
+function MapSettingsSimPanelComponent() {
   const applyScenario = useSimStore((s) => s.applyScenario);
-  const density = useSimStore((s) => s.density);
   const showCrowdAgents = useSimStore((s) => s.showCrowdAgents);
   const setShowCrowdAgents = useSimStore((s) => s.setShowCrowdAgents);
   const clearManualOverrides = useSimStore((s) => s.clearManualOverrides);
@@ -30,7 +33,10 @@ export function MapSettingsSimPanel() {
 
   const handleSetManualDensity = (level: keyof typeof DENSITY_LEVELS) => {
     const value = DENSITY_LEVELS[level];
-    applyScenario({ density: { ...density, [manualDensityZoneId]: value } });
+    // Patch ONLY the selected zone — applyScenario registers every key in the
+    // patch as a manual override, so spreading the whole live density map here
+    // would freeze every zone on the map, not just the one being edited.
+    applyScenario({ density: { [manualDensityZoneId]: value } });
   };
 
   return (

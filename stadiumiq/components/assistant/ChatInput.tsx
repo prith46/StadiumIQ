@@ -36,8 +36,8 @@ export function ChatInput({
     }
   };
 
-  const handleChange = (e: KeyboardEvent<HTMLTextAreaElement> | ChangeEvent<HTMLTextAreaElement>) => {
-    setText((e.target as any).value);
+  const handleChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
+    setText(e.target.value);
   };
 
   const handleVoiceTranscript = (transcript: string) => {

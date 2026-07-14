@@ -1,18 +1,18 @@
 import { create } from 'zustand';
-import { z } from 'zod';
-import { Zone, SimState, SimConfig, Incident, DensityFrame, FanContext, TicketData } from '../types';
+import { Zone, SimState, SimConfig, FanContext, TicketData, UploadDataset } from '../types';
 import { ZONES } from '../venue/venue';
 import {
   DEFAULT_SIM_CONFIG,
   MATCH_START_SEC,
-  tickSimulation,
   mergeStatePatch,
   pruneAndCountSessions,
   computeGateStatus,
   blendSensorInfluence,
+  decayRoutedLoad,
 } from '../simulation/engine';
 import { generateTimeline } from '../simulation/timeline';
-import { createSimChannel, ChannelMessage } from '../simulation/channel';
+import { createSimChannel } from '../simulation/channel';
+import { validateUploadDatasetObject } from '../validation/uploadDataset';
 import {
   computeSequencerState,
   initSequencer,
@@ -29,7 +29,6 @@ import { resolveOverriddenDensity, ManualOverride, OVERRIDE_HOLD_SEC, OVERRIDE_D
 
 interface SimStore extends SimState {
   sessionId: string;
-  isRunning: boolean;
   previousDensity: Record<string, number>; // M22: density snapshot from the prior tick, used to derive flow vectors
   sessionHeartbeats: Record<string, Record<string, number>>; // zoneId -> sessionId -> lastSeenMs
   fanContext: FanContext;
@@ -39,8 +38,6 @@ interface SimStore extends SimState {
   sequencerSeed: number | null;
   sequencerStartedAtMs: number | null;
   startAutoSequencer: (zones: Zone[]) => void;
-  startEngine: (zones: Zone[], config?: SimConfig) => void;
-  stopEngine: () => void;
   heartbeat: (zoneId: string) => void;
   applyScenario: (patch: Partial<SimState>, isGodMode?: boolean) => void;
   reset: (zones: Zone[], config?: SimConfig) => void;
@@ -60,32 +57,15 @@ interface SimStore extends SimState {
   clearManualOverrides: () => void;
 }
 
+type SetState = (partial: Partial<SimStore>) => void;
+type GetState = () => SimStore;
+
 // Module-level variables to track active execution details
 const knownZoneIds = new Set<string>(ZONES.map(z => z.id));
 let activeZones: Zone[] = ZONES;
-let tickIntervalId: any = null;
 let channelInstance: ReturnType<typeof createSimChannel> | null = null;
-let sequencerTickIntervalId: any = null;
+let sequencerTickIntervalId: ReturnType<typeof setInterval> | null = null;
 let sequencerStarted = false;
-
-// Validation Schema for Incidents
-const incidentSchema = z.object({
-  id: z.string(),
-  type: z.enum(['crowd', 'medical', 'assistance', 'security', 'evacuation']),
-  zoneId: z.string(),
-  note: z.string(),
-  status: z.enum(['pending', 'dispatched', 'resolved']),
-  createdAt: z.number(),
-  responderId: z.string().optional(),
-  etaSec: z.number().optional(),
-});
-
-// Validation Schema for imported datasets
-const uploadDatasetSchema = z.object({
-  density: z.record(z.string(), z.number().min(0).max(1)).optional(),
-  incidents: z.array(incidentSchema).optional(),
-  gateStatus: z.record(z.string(), z.enum(['open', 'congested', 'closed'])).optional(),
-}).strict();
 
 // Helper to generate a session UUID (fallback if crypto.randomUUID is not available in environment)
 function generateSessionId(): string {
@@ -126,6 +106,168 @@ function persistFanContext(fanContext: FanContext): void {
   }
 }
 
+/** Per-zone live-state records reset by `reset` and used as the store's initial shape. */
+function buildInitialSimRecords(zones: Zone[]): {
+  density: Record<string, number>;
+  sensorCounts: Record<string, number>;
+  routedLoad: Record<string, number>;
+  gateStatus: Record<string, 'open' | 'congested' | 'closed'>;
+} {
+  const density: Record<string, number> = {};
+  const sensorCounts: Record<string, number> = {};
+  const routedLoad: Record<string, number> = {};
+  const gateStatus: Record<string, 'open' | 'congested' | 'closed'> = {};
+
+  for (const zone of zones) {
+    density[zone.id] = 0;
+    sensorCounts[zone.id] = 0;
+    routedLoad[zone.id] = 0;
+    if (zone.type === 'gate') {
+      gateStatus[zone.id] = 'open';
+    }
+  }
+
+  return { density, sensorCounts, routedLoad, gateStatus };
+}
+
+/**
+ * Returns `prev` when `next` holds identical keys/values, so per-tick records
+ * that did not actually change keep their object identity — Zustand slice
+ * subscribers (the SVG map, gate markers, KPI panels) then skip re-rendering.
+ * Once the sequencer reaches its idle phase every record stabilises and the
+ * 1s tick stops causing any re-render at all.
+ */
+function stableRecord<T>(prev: Record<string, T>, next: Record<string, T>): Record<string, T> {
+  const nextKeys = Object.keys(next);
+  if (nextKeys.length !== Object.keys(prev).length) return next;
+  for (const key of nextKeys) {
+    if (!Object.is(prev[key], next[key])) return next;
+  }
+  return prev;
+}
+
+/**
+ * Applies a scenario patch to local state, registering density/gate values as
+ * manual overrides so the sequencer holds (then decays) them instead of
+ * overwriting them on its next tick. Shared by the local `applyScenario`
+ * action and the cross-tab SCENARIO receive path — the ONLY difference is
+ * that the local action also broadcasts.
+ */
+function applyScenarioLocal(
+  patch: Partial<SimState>,
+  isGodMode: boolean | undefined,
+  set: SetState,
+  get: GetState
+): void {
+  const state = get();
+  const now = Date.now();
+
+  const newDensityOverrides = { ...state.manualDensityOverrides };
+  if (patch.density) {
+    Object.entries(patch.density).forEach(([zoneId, val]) => {
+      newDensityOverrides[zoneId] = { value: val, setAtMs: now, isGodMode };
+    });
+  }
+  const newGateStatusOverrides = { ...state.manualGateStatusOverrides };
+  if (patch.gateStatus) {
+    Object.entries(patch.gateStatus).forEach(([zoneId, val]) => {
+      newGateStatusOverrides[zoneId] = { value: val, setAtMs: now };
+    });
+  }
+
+  const merged = mergeStatePatch(state, patch);
+  set({
+    ...merged,
+    manualDensityOverrides: newDensityOverrides,
+    manualGateStatusOverrides: newGateStatusOverrides,
+  });
+}
+
+/** Reset of the sim-state records shared by the local `reset` action and the cross-tab RESET receive path. */
+function applyResetLocal(zones: Zone[], config: SimConfig | undefined, set: SetState): void {
+  const cfg = config || DEFAULT_SIM_CONFIG;
+
+  knownZoneIds.clear();
+  zones.forEach(z => knownZoneIds.add(z.id));
+  activeZones = zones;
+
+  const { density, sensorCounts, routedLoad, gateStatus } = buildInitialSimRecords(zones);
+  const timeline = generateTimeline(zones, cfg.seed);
+
+  set({
+    matchClockSec: MATCH_START_SEC,
+    density,
+    previousDensity: density,
+    gateStatus,
+    incidents: [],
+    routedLoad,
+    sensorCounts,
+    timeline,
+    sessionHeartbeats: {},
+    sos: {
+      active: false,
+      triggeredBy: null,
+      triggeredAtSec: 0,
+    },
+    manualDensityOverrides: {},
+    manualGateStatusOverrides: {},
+  });
+}
+
+/**
+ * Registers the persistent cross-tab channel listener exactly once per
+ * process. Called from the live startup path (startAutoSequencer), so the
+ * SCENARIO/IMPORT/RESET/HEARTBEAT/SOS broadcasts posted by store actions are
+ * actually received by other tabs. Receive paths call the *Local helpers
+ * (never the broadcasting actions) so an incoming message is never re-posted —
+ * re-posting RESET, for example, would ping-pong between tabs forever.
+ */
+function ensureChannelListener(set: SetState, get: GetState): void {
+  if (channelInstance) return;
+
+  channelInstance = createSimChannel((msg) => {
+    const state = get();
+    if ('senderId' in msg && msg.senderId === state.sessionId) return;
+
+    if (msg.type === 'HEARTBEAT') {
+      if (msg.sessionId !== state.sessionId && knownZoneIds.has(msg.zoneId)) {
+        const sh = { ...state.sessionHeartbeats };
+        if (!sh[msg.zoneId]) sh[msg.zoneId] = {};
+        sh[msg.zoneId][msg.sessionId] = msg.timestamp;
+        set({ sessionHeartbeats: sh });
+      }
+    } else if (msg.type === 'SCENARIO') {
+      applyScenarioLocal(msg.patch, undefined, set, get);
+    } else if (msg.type === 'RESET') {
+      applyResetLocal(activeZones, undefined, set);
+    } else if (msg.type === 'IMPORT') {
+      // Defense in depth: the sender validated before posting, but a channel
+      // message is still an external input — re-validate before applying.
+      const result = validateUploadDatasetObject(msg.dataset);
+      if (result.valid && result.data) {
+        applyScenarioLocal(result.data, undefined, set, get);
+      }
+    } else if (msg.type === 'sos_trigger') {
+      set({
+        sos: {
+          active: true,
+          triggeredBy: msg.triggeredBy,
+          triggeredAtSec: msg.atSec,
+        },
+      });
+    } else if (msg.type === 'sos_clear') {
+      set({
+        sos: {
+          active: false,
+          triggeredBy: null,
+          triggeredAtSec: msg.atSec,
+        },
+      });
+    }
+    // SEQUENCER_INIT is handled by the dedicated join channel in startAutoSequencer.
+  });
+}
+
 /**
  * M29: drives matchClockSec/density/gateStatus purely from elapsed wall time
  * (via `computeSequencerState`) instead of a fixed per-tick increment. Runs
@@ -136,8 +278,8 @@ function beginSequencerTick(
   seed: number,
   sessionStartedAtMs: number,
   zones: Zone[],
-  set: (partial: Partial<SimStore>) => void,
-  get: () => SimStore
+  set: SetState,
+  get: GetState
 ) {
   set({ sequencerSeed: seed, sequencerStartedAtMs: sessionStartedAtMs, sequencerPhase: 'pre' });
 
@@ -172,14 +314,17 @@ function beginSequencerTick(
       });
     }
 
-    const OVERRIDE_DECAY_SEC = 20;
     const now = Date.now();
+    // Overrides live for the full hold + decay window (30s + 20s) so
+    // resolveOverriddenDensity can actually run its decay phase; god-mode
+    // overrides persist until explicitly cleared (Reset / clearManualOverrides).
+    const overrideLifetimeSec = OVERRIDE_HOLD_SEC + OVERRIDE_DECAY_SEC;
 
     // Lazily clean expired override entries out of the record
     const updatedDensityOverrides = { ...state.manualDensityOverrides };
     let densityOverridesChanged = false;
     Object.entries(state.manualDensityOverrides).forEach(([zoneId, override]) => {
-      if ((now - override.setAtMs) / 1000 >= OVERRIDE_DECAY_SEC) {
+      if (!override.isGodMode && (now - override.setAtMs) / 1000 >= overrideLifetimeSec) {
         delete updatedDensityOverrides[zoneId];
         densityOverridesChanged = true;
       }
@@ -188,7 +333,7 @@ function beginSequencerTick(
     const updatedGateStatusOverrides = { ...state.manualGateStatusOverrides };
     let gateStatusOverridesChanged = false;
     Object.entries(state.manualGateStatusOverrides).forEach(([zoneId, override]) => {
-      if ((now - override.setAtMs) / 1000 >= OVERRIDE_DECAY_SEC) {
+      if ((now - override.setAtMs) / 1000 >= overrideLifetimeSec) {
         delete updatedGateStatusOverrides[zoneId];
         gateStatusOverridesChanged = true;
       }
@@ -199,6 +344,25 @@ function beginSequencerTick(
         manualDensityOverrides: updatedDensityOverrides,
         manualGateStatusOverrides: updatedGateStatusOverrides,
       });
+    }
+
+    // Live-state upkeep ported from the retired F3 engine tick (the pieces
+    // still needed by the sequencer path): fan-as-sensor session TTL pruning
+    // into sensorCounts, and M8 routedLoad decay. The local fan's own
+    // heartbeat is refreshed first so their presence never expires while the
+    // session is alive.
+    const refreshedHeartbeats = { ...state.sessionHeartbeats };
+    const ownLocation = state.fanContext.location;
+    if (ownLocation && knownZoneIds.has(ownLocation)) {
+      refreshedHeartbeats[ownLocation] = {
+        ...(refreshedHeartbeats[ownLocation] ?? {}),
+        [state.sessionId]: now,
+      };
+    }
+    const { pruned, counts } = pruneAndCountSessions(refreshedHeartbeats, now);
+    const sensorCounts: Record<string, number> = {};
+    for (const zone of zones) {
+      sensorCounts[zone.id] = counts[zone.id] ?? 0;
     }
 
     const density: Record<string, number> = {};
@@ -219,7 +383,7 @@ function beginSequencerTick(
         base = egressDensityForZone(zone.id, seed, EGRESS_DURATION_SEC);
       }
 
-      const autoVal = blendSensorInfluence(base, state.sensorCounts[zone.id] ?? 0);
+      const autoVal = blendSensorInfluence(base, sensorCounts[zone.id] ?? 0);
 
       density[zone.id] = resolveOverriddenDensity(
         zone.id,
@@ -243,12 +407,27 @@ function beginSequencerTick(
       }
     }
 
+    // M8: routedLoad decays multiplicatively each tick and resets outright at
+    // phase boundaries (pre → live → post), since a phase change invalidates
+    // the routing pressure accumulated in the previous phase.
+    const crossedPhaseBoundary = state.sequencerPhase !== null && state.sequencerPhase !== seq.phase;
+
+    // Reference-stabilise every per-tick record: replacing an unchanged map
+    // with a value-identical new object forced the whole SVG map (and every
+    // other slice subscriber) to re-render each second even when nothing
+    // visibly changed — at idle the entire tick is now render-free.
     set({
       matchClockSec: seq.matchClockSec,
-      density,
+      density: stableRecord(state.density, density),
       previousDensity: state.density,
-      gateStatus,
+      gateStatus: stableRecord(state.gateStatus, gateStatus),
       sequencerPhase: seq.phase,
+      sessionHeartbeats: pruned,
+      sensorCounts: stableRecord(state.sensorCounts, sensorCounts),
+      routedLoad: stableRecord(
+        state.routedLoad,
+        crossedPhaseBoundary ? {} : decayRoutedLoad(state.routedLoad)
+      ),
     });
 
     if (seq.phase === 'idle' && sequencerTickIntervalId) {
@@ -266,43 +445,49 @@ function beginSequencerTick(
   sequencerTickIntervalId = setInterval(tick, 1000);
 }
 
+/**
+ * Test hook: tears down the module-level simulation lifecycle (sequencer
+ * interval, channel, once-per-process guard) so each test can start the
+ * sequencer fresh. Mirrors resetRateLimits() in lib/server/rateLimit.ts.
+ */
+export function resetSimLifecycleForTests(): void {
+  if (sequencerTickIntervalId) {
+    clearInterval(sequencerTickIntervalId);
+    sequencerTickIntervalId = null;
+  }
+  if (channelInstance) {
+    channelInstance.close();
+    channelInstance = null;
+  }
+  sequencerStarted = false;
+  knownZoneIds.clear();
+  ZONES.forEach((z) => knownZoneIds.add(z.id));
+  activeZones = ZONES;
+}
+
 export const useSimStore = create<SimStore>((set, get) => {
   const defaultSessionId = generateSessionId();
   const persistedFanContext = loadPersistedFanContext();
 
-  // Initial placeholder state
-  const initialDensity: Record<string, number> = {};
-  const initialSensorCounts: Record<string, number> = {};
-  const initialRoutedLoad: Record<string, number> = {};
-  const initialGateStatus: Record<string, 'open' | 'congested' | 'closed'> = {};
-
-  for (const zone of ZONES) {
-    initialDensity[zone.id] = 0;
-    initialSensorCounts[zone.id] = 0;
-    initialRoutedLoad[zone.id] = 0;
-    if (zone.type === 'gate') {
-      initialGateStatus[zone.id] = 'open';
-    }
-  }
+  const { density, sensorCounts, routedLoad, gateStatus } = buildInitialSimRecords(ZONES);
 
   // Restore the fan's sensor presence in their persisted zone.
-  if (persistedFanContext?.location && initialSensorCounts[persistedFanContext.location] !== undefined) {
-    initialSensorCounts[persistedFanContext.location] += 1;
+  if (persistedFanContext?.location && sensorCounts[persistedFanContext.location] !== undefined) {
+    sensorCounts[persistedFanContext.location] += 1;
   }
 
   return {
     // Identity
     sessionId: defaultSessionId,
-    isRunning: false,
 
     // SimState
     matchClockSec: MATCH_START_SEC,
-    density: initialDensity,
-    previousDensity: initialDensity,
-    gateStatus: initialGateStatus,
+    density,
+    previousDensity: density,
+    gateStatus,
     incidents: [],
-    routedLoad: initialRoutedLoad,
-    sensorCounts: initialSensorCounts,
+    routedLoad,
+    sensorCounts,
     timeline: [],
 
     // FanContext
@@ -345,11 +530,15 @@ export const useSimStore = create<SimStore>((set, get) => {
       zones.forEach((z) => knownZoneIds.add(z.id));
       activeZones = zones;
 
+      // The persistent cross-tab listener lives on the live startup path so
+      // SCENARIO/IMPORT/RESET/HEARTBEAT/SOS posts are actually received.
+      ensureChannelListener(set, get);
+
       let settled = false;
 
       // Listen briefly for an existing session's { seed, sessionStartedAtMs }
       // broadcast on the SAME channel every other sync mechanism already uses
-      // (M14 SOS, STATE_SYNC, etc.) — reused, not a second channel/topic.
+      // (M14 SOS, SCENARIO, etc.) — reused, not a second channel/topic.
       const joinChannel = createSimChannel((msg) => {
         if (settled || msg.type !== 'SEQUENCER_INIT') return;
         settled = true;
@@ -375,166 +564,6 @@ export const useSimStore = create<SimStore>((set, get) => {
       }, 200);
     },
 
-    startEngine: (zones: Zone[], config?: SimConfig) => {
-      const cfg = config || DEFAULT_SIM_CONFIG;
-
-      if (tickIntervalId) {
-        clearInterval(tickIntervalId);
-        tickIntervalId = null;
-      }
-
-      knownZoneIds.clear();
-      zones.forEach(z => knownZoneIds.add(z.id));
-      activeZones = zones;
-
-      const density: Record<string, number> = {};
-      const sensorCounts: Record<string, number> = {};
-      const routedLoad: Record<string, number> = {};
-      const gateStatus: Record<string, 'open' | 'congested' | 'closed'> = {};
-
-      for (const zone of zones) {
-        density[zone.id] = 0;
-        sensorCounts[zone.id] = 0;
-        routedLoad[zone.id] = 0;
-        if (zone.type === 'gate') {
-          gateStatus[zone.id] = 'open';
-        }
-      }
-
-      const timeline = generateTimeline(zones, cfg.seed);
-
-      set({
-        isRunning: true,
-        matchClockSec: MATCH_START_SEC,
-        density,
-        previousDensity: density,
-        gateStatus,
-        incidents: [],
-        routedLoad,
-        sensorCounts,
-        timeline,
-        sessionHeartbeats: {},
-        sos: {
-          active: false,
-          triggeredBy: null,
-          triggeredAtSec: 0,
-        },
-      });
-
-      if (!channelInstance) {
-        channelInstance = createSimChannel((msg) => {
-          const state = get();
-          if (msg.type === 'STATE_SYNC') {
-            if (msg.senderId !== state.sessionId) {
-              set({
-                matchClockSec: msg.payload.matchClockSec,
-                density: msg.payload.density,
-                gateStatus: msg.payload.gateStatus,
-                incidents: msg.payload.incidents,
-                routedLoad: msg.payload.routedLoad,
-                sensorCounts: msg.payload.sensorCounts,
-                timeline: msg.payload.timeline,
-                // Don't let global sync overwrite a fan's locally-activated personal SOS
-                // Also, never globally adopt a fan's personal SOS activation from another tab
-                sos: (msg.payload.sos?.active && msg.payload.sos?.triggeredBy === 'organizer')
-                  ? msg.payload.sos
-                  : (state.sos?.active && state.sos?.triggeredBy === 'fan')
-                    ? state.sos
-                    : { active: false, triggeredBy: null, triggeredAtSec: 0 },
-              });
-            }
-          } else if (msg.type === 'HEARTBEAT') {
-            if (msg.sessionId !== state.sessionId && knownZoneIds.has(msg.zoneId)) {
-              const sh = { ...state.sessionHeartbeats };
-              if (!sh[msg.zoneId]) sh[msg.zoneId] = {};
-              sh[msg.zoneId][msg.sessionId] = msg.timestamp;
-              set({ sessionHeartbeats: sh });
-            }
-          } else if (msg.type === 'SCENARIO') {
-            if (msg.senderId !== state.sessionId) {
-              const merged = mergeStatePatch(state, msg.patch);
-              set(merged);
-            }
-          } else if (msg.type === 'RESET') {
-            if (msg.senderId !== state.sessionId) {
-              get().reset(activeZones, cfg);
-            }
-          } else if (msg.type === 'IMPORT') {
-            if (msg.senderId !== state.sessionId) {
-              const merged = mergeStatePatch(state, msg.dataset);
-              set(merged);
-            }
-          } else if (msg.type === 'sos_trigger') {
-            if (msg.senderId !== state.sessionId) {
-              set({
-                sos: {
-                  active: true,
-                  triggeredBy: msg.triggeredBy,
-                  triggeredAtSec: msg.atSec,
-                },
-              });
-            }
-          } else if (msg.type === 'sos_clear') {
-            if (msg.senderId !== state.sessionId) {
-              set({
-                sos: {
-                  active: false,
-                  triggeredBy: null,
-                  triggeredAtSec: msg.atSec,
-                },
-              });
-            }
-          }
-        });
-      }
-
-      tickIntervalId = setInterval(() => {
-        const state = get();
-        const { pruned, counts } = pruneAndCountSessions(state.sessionHeartbeats, Date.now());
-
-        const newSensorCounts: Record<string, number> = {};
-        for (const zone of activeZones) {
-          newSensorCounts[zone.id] = counts[zone.id] ?? 0;
-        }
-
-        const updatedStateForTick = {
-          ...state,
-          sessionHeartbeats: pruned,
-          sensorCounts: newSensorCounts,
-        };
-
-        const nextState = tickSimulation(updatedStateForTick, activeZones, cfg);
-
-        set({
-          ...nextState,
-          previousDensity: state.density,
-          sessionHeartbeats: pruned,
-          sensorCounts: newSensorCounts,
-        });
-
-        if (channelInstance) {
-          channelInstance.post({
-            type: 'STATE_SYNC',
-            payload: get(),
-            senderId: get().sessionId,
-            timestamp: Date.now(),
-          });
-        }
-      }, cfg.tickIntervalMs);
-    },
-
-    stopEngine: () => {
-      if (tickIntervalId) {
-        clearInterval(tickIntervalId);
-        tickIntervalId = null;
-      }
-      if (channelInstance) {
-        channelInstance.close();
-        channelInstance = null;
-      }
-      set({ isRunning: false });
-    },
-
     heartbeat: (zoneId: string) => {
       if (!knownZoneIds.has(zoneId)) return;
       const state = get();
@@ -555,119 +584,20 @@ export const useSimStore = create<SimStore>((set, get) => {
     },
 
     applyScenario: (patch: Partial<SimState>, isGodMode?: boolean) => {
-      const state = get();
-      const newDensityOverrides = { ...state.manualDensityOverrides };
-      const now = Date.now();
-      if (patch.density) {
-        Object.entries(patch.density).forEach(([zoneId, val]) => {
-          newDensityOverrides[zoneId] = { value: val, setAtMs: now, isGodMode };
-        });
-      }
-      const newGateStatusOverrides = { ...state.manualGateStatusOverrides };
-      if (patch.gateStatus) {
-        Object.entries(patch.gateStatus).forEach(([zoneId, val]) => {
-          newGateStatusOverrides[zoneId] = { value: val, setAtMs: now };
-        });
-      }
-      const merged = mergeStatePatch(state, patch);
-      set({
-        ...merged,
-        manualDensityOverrides: newDensityOverrides,
-        manualGateStatusOverrides: newGateStatusOverrides,
-      });
+      applyScenarioLocal(patch, isGodMode, set, get);
 
       if (channelInstance) {
         channelInstance.post({
           type: 'SCENARIO',
           patch,
-          senderId: state.sessionId,
+          senderId: get().sessionId,
           timestamp: Date.now(),
         });
       }
     },
 
     reset: (zones: Zone[], config?: SimConfig) => {
-      const cfg = config || DEFAULT_SIM_CONFIG;
-      const wasRunning = get().isRunning;
-
-      if (tickIntervalId) {
-        clearInterval(tickIntervalId);
-        tickIntervalId = null;
-      }
-
-      knownZoneIds.clear();
-      zones.forEach(z => knownZoneIds.add(z.id));
-      activeZones = zones;
-
-      const density: Record<string, number> = {};
-      const sensorCounts: Record<string, number> = {};
-      const routedLoad: Record<string, number> = {};
-      const gateStatus: Record<string, 'open' | 'congested' | 'closed'> = {};
-
-      for (const zone of zones) {
-        density[zone.id] = 0;
-        sensorCounts[zone.id] = 0;
-        routedLoad[zone.id] = 0;
-        if (zone.type === 'gate') {
-          gateStatus[zone.id] = 'open';
-        }
-      }
-
-      const timeline = generateTimeline(zones, cfg.seed);
-
-      set({
-        matchClockSec: MATCH_START_SEC,
-        density,
-        previousDensity: density,
-        gateStatus,
-        incidents: [],
-        routedLoad,
-        sensorCounts,
-        timeline,
-        sessionHeartbeats: {},
-        sos: {
-          active: false,
-          triggeredBy: null,
-          triggeredAtSec: 0,
-        },
-        manualDensityOverrides: {},
-        manualGateStatusOverrides: {},
-      });
-
-      if (wasRunning) {
-        tickIntervalId = setInterval(() => {
-          const state = get();
-          const { pruned, counts } = pruneAndCountSessions(state.sessionHeartbeats, Date.now());
-
-          const newSensorCounts: Record<string, number> = {};
-          for (const zone of activeZones) {
-            newSensorCounts[zone.id] = counts[zone.id] ?? 0;
-          }
-
-          const updatedStateForTick = {
-            ...state,
-            sessionHeartbeats: pruned,
-            sensorCounts: newSensorCounts,
-          };
-
-          const nextState = tickSimulation(updatedStateForTick, activeZones, cfg);
-
-          set({
-            ...nextState,
-            sessionHeartbeats: pruned,
-            sensorCounts: newSensorCounts,
-          });
-
-          if (channelInstance) {
-            channelInstance.post({
-              type: 'STATE_SYNC',
-              payload: get(),
-              senderId: get().sessionId,
-              timestamp: Date.now(),
-            });
-          }
-        }, cfg.tickIntervalMs);
-      }
+      applyResetLocal(zones, config, set);
 
       if (channelInstance) {
         channelInstance.post({
@@ -679,51 +609,34 @@ export const useSimStore = create<SimStore>((set, get) => {
     },
 
     importDataset: (dataset: unknown) => {
-      let str = '';
+      let str: string | undefined;
       try {
         str = JSON.stringify(dataset);
-      } catch (err) {
+      } catch {
         return { ok: false, error: 'Invalid JSON payload' };
       }
-
+      if (typeof str !== 'string') {
+        return { ok: false, error: 'Invalid JSON payload' };
+      }
       if (str.length > 200000) {
         return { ok: false, error: 'Dataset too large' };
       }
 
-      const result = uploadDatasetSchema.safeParse(dataset);
-      if (!result.success) {
-        return { ok: false, error: result.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ') };
+      // Single source of truth for upload-shape rules: the same validator the
+      // UploadPanel runs on raw file text (lib/validation/uploadDataset.ts).
+      const result = validateUploadDatasetObject(dataset);
+      if (!result.valid || !result.data) {
+        return { ok: false, error: result.errors.join(', ') };
       }
 
-      const validated = result.data;
-      const state = get();
-      
-      const newDensityOverrides = { ...state.manualDensityOverrides };
-      const now = Date.now();
-      if (validated.density) {
-        Object.entries(validated.density).forEach(([zoneId, val]) => {
-          newDensityOverrides[zoneId] = { value: val, setAtMs: now };
-        });
-      }
-      const newGateStatusOverrides = { ...state.manualGateStatusOverrides };
-      if (validated.gateStatus) {
-        Object.entries(validated.gateStatus).forEach(([zoneId, val]) => {
-          newGateStatusOverrides[zoneId] = { value: val, setAtMs: now };
-        });
-      }
-
-      const merged = mergeStatePatch(state, validated);
-      set({
-        ...merged,
-        manualDensityOverrides: newDensityOverrides,
-        manualGateStatusOverrides: newGateStatusOverrides,
-      });
+      const validated: UploadDataset = result.data;
+      applyScenarioLocal(validated, undefined, set, get);
 
       if (channelInstance) {
         channelInstance.post({
           type: 'IMPORT',
           dataset: validated,
-          senderId: state.sessionId,
+          senderId: get().sessionId,
           timestamp: Date.now(),
         });
       }
@@ -809,7 +722,7 @@ export const useSimStore = create<SimStore>((set, get) => {
     triggerSos: (triggeredBy: 'fan' | 'organizer') => {
       const state = get();
       const currentClock = state.matchClockSec;
-      
+
       if (triggeredBy === 'organizer') {
         set({ sos: { active: true, triggeredBy, triggeredAtSec: currentClock } });
         if (channelInstance) {
@@ -846,7 +759,7 @@ export const useSimStore = create<SimStore>((set, get) => {
       const state = get();
       const currentClock = state.matchClockSec;
       const wasOrganizer = state.sos?.triggeredBy === 'organizer';
-      
+
       set({ sos: { active: false, triggeredBy: null, triggeredAtSec: currentClock } });
 
       if (wasOrganizer && channelInstance) {

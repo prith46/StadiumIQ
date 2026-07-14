@@ -39,7 +39,7 @@ function SosHeaderButton() {
   const sos = useSimStore((s) => s.sos);
   const triggerSos = useSimStore((s) => s.triggerSos);
   const [confirmSos, setConfirmSos] = React.useState(false);
-  const confirmTimeoutRef = React.useRef<any>(null);
+  const confirmTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleSosClick = () => {
     if (confirmSos) {

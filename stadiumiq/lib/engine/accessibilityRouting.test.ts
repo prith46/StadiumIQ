@@ -71,12 +71,13 @@ describe('Accessibility-First Routing (M11)', () => {
 
     // Verify AccessibleRouteResult shape on error
     expect('error' in result).toBe(true);
-    if ('error' in result) {
-      expect(result.error).toBe('no_accessible_route_found');
-      expect((result as any).path).toBeNull();
-      expect((result as any).accessible).toBe(false);
-      expect((result as any).noRouteFound).toBe(true);
-      expect((result as any).etaSec).toBeNull();
+    if ('error' in result && result.error === 'no_accessible_route_found') {
+      expect(result.path).toBeNull();
+      expect(result.accessible).toBe(false);
+      expect(result.noRouteFound).toBe(true);
+      expect(result.etaSec).toBeNull();
+    } else {
+      throw new Error('expected no_accessible_route_found');
     }
   });
 

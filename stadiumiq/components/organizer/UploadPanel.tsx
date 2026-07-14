@@ -14,7 +14,11 @@ import {
   EyeOff
 } from 'lucide-react';
 
-export function UploadPanel() {
+// memo(): no props, self-subscribed to its own store slices — the parent
+// Dashboard re-renders every 1s for its clock display and must not cascade here.
+export const UploadPanel = React.memo(UploadPanelComponent);
+
+function UploadPanelComponent() {
   const importDataset = useSimStore((s) => s.importDataset);
   const reset = useSimStore((s) => s.reset);
 

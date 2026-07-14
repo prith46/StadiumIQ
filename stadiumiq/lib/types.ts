@@ -134,7 +134,11 @@ export interface AssistantResponse {
   language: string;
   mapActions: Array<{ op: 'highlight' | 'route' | 'pin'; zoneId?: string; path?: string[] }>;
   alertLevel: 'none' | 'info' | 'warn' | 'critical';
-  meta?: { tool?: string; stress?: boolean };
+  // reportedIncident: an incident the reportIncident tool created server-side.
+  // The API layer is stateless — the browser store is the live source of
+  // truth — so the incident rides back on the response for the client to
+  // apply to its own simStore (where the organizer dashboard reads it).
+  meta?: { tool?: string; stress?: boolean; reportedIncident?: Incident };
 }
 
 export interface Scenario {

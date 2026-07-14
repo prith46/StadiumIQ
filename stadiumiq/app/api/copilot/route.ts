@@ -6,30 +6,34 @@ import { traceRootCause } from '@/lib/engine/rootCause';
 import { computeConfidenceBand } from '@/lib/engine/forecastConfidence';
 import { RESPONDERS } from '@/lib/venue/responders';
 import { EDGES } from '@/lib/venue/venue';
+import { simSnapshotSchema } from '@/lib/validation/simSnapshot';
+import { allowRequest } from '@/lib/server/rateLimit';
+import { readJsonBody } from '@/lib/server/readJsonBody';
+
+// Hard body cap, enforced while streaming. The copilot intentionally receives
+// the FULL forecast timeline (root-cause tracing reads history), so this cap
+// is higher than the assistant route's.
+const BODY_MAX_BYTES = 2 * 1024 * 1024;
 
 const requestSchema = z.object({
   type: z.enum(['brief', 'forecast']).default('brief'),
   query: z.string().max(2000).optional(),
-  simSnapshot: z.object({
-    matchClockSec: z.number(),
-    density: z.record(z.string(), z.number()),
-    gateStatus: z.record(z.string(), z.enum(['open', 'congested', 'closed'])),
-    incidents: z.array(z.any()),
-    routedLoad: z.record(z.string(), z.number()),
-    sensorCounts: z.record(z.string(), z.number()),
-    timeline: z.array(z.any()).optional(),
-  }),
+  simSnapshot: simSnapshotSchema,
 }).strict();
 
 export async function POST(req: Request) {
-  let body: any;
-  try {
-    body = await req.json();
-  } catch (err) {
-    return NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 });
+  if (!allowRequest('copilot', req)) {
+    return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
   }
 
-  const result = requestSchema.safeParse(body);
+  const read = await readJsonBody(req, BODY_MAX_BYTES);
+  if (!read.ok) {
+    return read.reason === 'too_large'
+      ? NextResponse.json({ error: 'Payload too large' }, { status: 413 })
+      : NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 });
+  }
+
+  const result = requestSchema.safeParse(read.body);
   if (!result.success) {
     return NextResponse.json({ error: 'Invalid request payload' }, { status: 400 });
   }
@@ -50,8 +54,8 @@ export async function POST(req: Request) {
       if (topHotspot && 'peakAtSec' in response) {
         const committedResponderIds = new Set(
           (validated.simSnapshot.incidents || [])
-            .filter((inc: any) => inc.status !== 'resolved' && inc.responderId)
-            .map((inc: any) => inc.responderId)
+            .filter((inc) => inc.status !== 'resolved' && inc.responderId)
+            .map((inc) => inc.responderId)
         );
         const candidateResponders = RESPONDERS.map((r) => ({
           ...r,

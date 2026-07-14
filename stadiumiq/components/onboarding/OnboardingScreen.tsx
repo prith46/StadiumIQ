@@ -56,7 +56,7 @@ export function OnboardingScreen({ onComplete }: OnboardingScreenProps) {
       try {
         setFanLocation(pendingZoneId);
         setStep('ticket');
-      } catch (err) {
+      } catch {
         setErrorMsg("Couldn't set your location — try again");
         setStep('select');
       }
@@ -69,7 +69,7 @@ export function OnboardingScreen({ onComplete }: OnboardingScreenProps) {
     try {
       setFanTicket(ticket);
       onComplete();
-    } catch (err) {
+    } catch {
       setErrorMsg("Couldn't sync your ticket — try again");
     }
   };

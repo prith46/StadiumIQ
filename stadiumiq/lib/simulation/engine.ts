@@ -1,4 +1,4 @@
-import { Zone, SimState, SimConfig, MatchPhase, Incident } from '../types';
+import { Zone, SimState, SimConfig, MatchPhase } from '../types';
 import { decayRoutedLoad as externalDecayRoutedLoad } from '../engine/loadBalance';
 
 export const MATCH_START_SEC = -1800;   // pre-match window opens 30 min before kickoff
@@ -180,47 +180,6 @@ export function pruneAndCountSessions(
   }
 
   return { pruned, counts };
-}
-
-export function tickSimulation(
-  state: SimState,
-  zones: Zone[],
-  config: SimConfig
-): SimState {
-  const nextMatchClockSec = Math.min(state.matchClockSec + config.simSecondsPerTick, FULL_TIME_END_SEC);
-
-  const nextDensity: Record<string, number> = {};
-  const nextGateStatus: Record<string, 'open' | 'congested' | 'closed'> = {};
-
-  for (const zone of zones) {
-    const base = computeBaseDensity(zone, nextMatchClockSec, config.seed);
-    nextDensity[zone.id] = blendSensorInfluence(base, state.sensorCounts[zone.id] ?? 0);
-
-    if (zone.type === 'gate') {
-      const prevStatus = state.gateStatus[zone.id];
-      const hasIncident = state.incidents.some(inc => inc.zoneId === zone.id && inc.status !== 'resolved');
-      const override = (prevStatus === 'closed' || hasIncident) ? prevStatus : undefined;
-      nextGateStatus[zone.id] = computeGateStatus(zone, nextDensity[zone.id], override);
-    }
-  }
-
-  const currentPhase = matchPhase(state.matchClockSec);
-  const nextPhase = matchPhase(nextMatchClockSec);
-  let nextRoutedLoad = decayRoutedLoad(state.routedLoad);
-
-  if (currentPhase !== nextPhase) {
-    nextRoutedLoad = {};
-  }
-
-  return {
-    matchClockSec: nextMatchClockSec,
-    density: nextDensity,
-    gateStatus: nextGateStatus,
-    incidents: state.incidents,
-    routedLoad: nextRoutedLoad,
-    sensorCounts: state.sensorCounts,
-    timeline: state.timeline,
-  };
 }
 
 export function mergeStatePatch(state: SimState, patch: Partial<SimState>): SimState {

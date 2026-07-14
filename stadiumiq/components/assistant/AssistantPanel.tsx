@@ -2,7 +2,7 @@
 
 import React, { useState, RefObject, useEffect } from 'react';
 import { useSimStore } from '../../lib/store/simStore';
-import { sendAssistantMessage, AssistantResponse, AssistantRequest } from '../../lib/assistant/client';
+import { sendAssistantMessage, AssistantRequest } from '../../lib/assistant/client';
 import { dispatchMapActions, StadiumMapHandle } from '../../lib/assistant/mapActionDispatcher';
 import { MessageList } from './MessageList';
 import { Message } from './MessageBubble';
@@ -125,53 +125,39 @@ export function AssistantPanel({
       fanContext,
     };
 
-    let partialMessageId = `assistant-partial-${Date.now()}`;
-    let isStreamingStarted = false;
-
     sendAssistantMessage(requestBody, {
-      onToken: (partialText) => {
-        setIsThinking(false);
-        setMessages((prev) => {
-          if (!isStreamingStarted) {
-            isStreamingStarted = true;
-            const newAssistantMsg: Message = {
-              id: partialMessageId,
-              role: 'assistant',
-              content: partialText,
-              timestamp: new Date(),
-              alertLevel: 'none',
-            };
-            return [...prev, newAssistantMsg];
-          } else {
-            return prev.map((msg) =>
-              msg.id === partialMessageId ? { ...msg, content: partialText } : msg
-            );
-          }
-        });
-      },
       onComplete: (fullResponse) => {
         setIsThinking(false);
         const finalMsgId = `assistant-${Date.now()}-${Math.random()}`;
-        
+
         if (fullResponse.meta?.stress) {
           setIsCalmMode(true);
         } else {
           setIsCalmMode(false);
         }
 
-        setMessages((prev) => {
-          // Remove partial if it was added, otherwise add complete
-          const filtered = prev.filter((msg) => msg.id !== partialMessageId);
-          const finalMsg: Message = {
+        setMessages((prev) => [
+          ...prev,
+          {
             id: finalMsgId,
             role: 'assistant',
             content: fullResponse.message,
             alertLevel: fullResponse.alertLevel,
             timestamp: new Date(),
             meta: fullResponse.meta,
-          };
-          return [...filtered, finalMsg];
-        });
+          },
+        ]);
+
+        // The reportIncident tool runs server-side, where this browser's
+        // store doesn't exist — apply the incident it created here so the
+        // organizer dashboard actually receives the fan's report.
+        const reported = fullResponse.meta?.reportedIncident;
+        if (reported) {
+          const current = useSimStore.getState();
+          if (!current.incidents.some((inc) => inc.id === reported.id)) {
+            current.applyScenario({ incidents: [...current.incidents, reported] });
+          }
+        }
 
         // Speak response if enabled
         if (ttsEnabled) {
@@ -215,13 +201,13 @@ export function AssistantPanel({
       }`}>
         <div>
           <h3 className="font-bold text-sm">Stadium Assistant</h3>
-          <p className="text-[10px] text-white/80">
+          <p className="text-[10px] text-white">
             {isCalmMode ? 'Calm Mode Active' : 'Digital Twin Grounding Layer'}
           </p>
         </div>
         <div className="flex items-center gap-1.5">
           <span className={`w-2 h-2 rounded-full animate-pulse ${isCalmMode ? 'bg-teal-400' : 'bg-green-400'}`} />
-          <span className="text-[10px] uppercase font-bold tracking-wider text-white/90">
+          <span className="text-[10px] uppercase font-bold tracking-wider text-white">
             {isCalmMode ? 'Calm Mode' : 'Grounded AI'}
           </span>
         </div>

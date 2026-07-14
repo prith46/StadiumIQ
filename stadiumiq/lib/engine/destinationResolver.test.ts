@@ -104,7 +104,7 @@ describe('resolveDestination — kind: poiType', () => {
       { kind: 'poiType', poiType: 'restroom' },
       'origin',
       FX_EDGES, FX_ZONES, FX_POIS,
-      {}, {}, FX_GATE_STATUS
+      {}, FX_GATE_STATUS
     );
     // near-zone is 30s away; far-zone is 60s away → should pick near-zone
     expect(result).toBe('near-zone');
@@ -121,7 +121,7 @@ describe('resolveDestination — kind: poiType', () => {
       { kind: 'poiType', poiType: 'restroom' },
       'origin',
       FX_EDGES, FX_ZONES, poisWithClosedAtOrigin,
-      {}, {}, FX_GATE_STATUS
+      {}, FX_GATE_STATUS
     );
     // closed-at-origin skipped → nearest open is near-zone
     expect(result).toBe('near-zone');
@@ -133,7 +133,6 @@ describe('resolveDestination — kind: poiType', () => {
       { kind: 'poiType', poiType: 'restroom' },
       'origin',
       FX_EDGES, FX_ZONES, FX_POIS,
-      {},
       { 'close-poi': 'closed' },  // runtime override
       FX_GATE_STATUS
     );
@@ -169,7 +168,7 @@ describe('resolveDestination — kind: nearestExit', () => {
       { kind: 'nearestExit' },
       'origin',
       FX_EDGES, FX_ZONES, FX_POIS,
-      {}, {}, FX_GATE_STATUS
+      {}, FX_GATE_STATUS
     );
     // gate1 is 60s away (origin→near-zone→gate1) and 'open'
     // gate2 is 90s away and 'congested'
@@ -186,7 +185,7 @@ describe('resolveDestination — kind: nearestExit', () => {
       { kind: 'nearestExit' },
       'origin',
       FX_EDGES, FX_ZONES, FX_POIS,
-      {}, {}, allCongestedStatus
+      {}, allCongestedStatus
     );
     // Should still return a gate (nearest congested)
     expect(typeof result).toBe('string');
@@ -202,7 +201,7 @@ describe('resolveDestination — kind: nearestExit', () => {
       { kind: 'nearestExit' },
       'origin',
       FX_EDGES, FX_ZONES, FX_POIS,
-      {}, {}, allClosedGates
+      {}, allClosedGates
     );
     expect(result).toEqual({ error: 'no_open_exit' });
   });
@@ -232,7 +231,7 @@ describe('resolveDestination — kind: nearestExit', () => {
       twoGateEdges,
       FX_ZONES,
       FX_POIS,
-      {}, {}, twoGateStatus
+      {}, twoGateStatus
     );
     expect(result).toBe('gate1');
   });

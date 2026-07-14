@@ -74,7 +74,6 @@ export function runAlertTriageService(): Array<{
       EDGES,
       ZONES,
       POIS,
-      density,
       poiStatus,
       gateStatus
     );
@@ -88,7 +87,9 @@ export function runAlertTriageService(): Array<{
     // rule as the F4 tool adapter in lib/ai/tools.ts).
     const persistentSensory = sensoryToRouteFilters(fanContext.sensory);
     const mergedFilters: RouteFilters = {
-      accessibleOnly: filters?.accessibleOnly,
+      // M11 hard filter: an accessibility-flagged fan must never be routed
+      // via stairs — same default as routingService and the F4 tool adapter.
+      accessibleOnly: filters?.accessibleOnly ?? (fanContext.accessibility || undefined),
       avoidEnclosed: filters?.avoidEnclosed ?? persistentSensory.avoidEnclosed,
       maxNoise: filters?.maxNoise ?? persistentSensory.maxNoise,
       avoidAffiliation: filters?.avoidAffiliation ?? persistentSensory.avoidAffiliation,

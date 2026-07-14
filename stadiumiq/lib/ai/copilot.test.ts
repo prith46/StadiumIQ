@@ -67,7 +67,9 @@ describe('Organizer AI Copilot Service', () => {
 
       const brief: any = await getCopilotBrief(input);
 
-      expect(brief.summary).toContain('operations brief loaded from fallback cache');
+      // The fallback must SAY it is a fallback — never claim the primary
+      // system is healthy when the LLM call just failed.
+      expect(brief.summary).toContain('deterministic fallback');
       expect(brief.topRisks[0].description).toBe('Unresolved incident reported: Chest pain');
       expect(brief.recommendedActions.length).toBeGreaterThan(0);
     });

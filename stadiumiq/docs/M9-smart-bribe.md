@@ -26,7 +26,7 @@ Smart Bribe Incentives convert crowd-safety bottlenecks at exit gates into conce
 
 ## Technical Specifications
 
-### `lib/engine/smartBribe.ts`
+### Incentive engine (`lib/engine/incentiveTriage.ts` + `lib/engine/incentiveService.ts`)
 
 ```typescript
 export interface SmartBribeInput {

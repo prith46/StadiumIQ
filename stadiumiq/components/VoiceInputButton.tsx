@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Mic, MicOff, AlertCircle } from "lucide-react";
 import { motion, useReducedMotion } from "framer-motion";
 import { useSimStore } from "../lib/store/simStore";
-import { createSpeechRecognizer } from "../lib/voice/speechRecognition";
+import { createSpeechRecognizer, getSpeechRecognitionConstructor } from "../lib/voice/speechRecognition";
 import { toSpeechLocaleTag } from "../lib/voice/languageTags";
 
 interface VoiceInputButtonProps {
@@ -24,11 +24,7 @@ export function VoiceInputButton({ onTranscript, disabled = false }: VoiceInputB
 
   // Feature detection check on mount
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const SpeechRecognition =
-        (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      setIsSupported(!!SpeechRecognition);
-    }
+    setIsSupported(!!getSpeechRecognitionConstructor());
   }, []);
 
   // Clean up SpeechRecognition session on unmount

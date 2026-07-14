@@ -1,4 +1,3 @@
-import type { Zone } from '../types';
 import { ZONES } from '../venue/venue';
 
 export interface IncentiveTriageInput {

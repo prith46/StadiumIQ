@@ -149,7 +149,7 @@ export async function detectLanguageFromTicket(
   let client;
   try {
     client = createClient();
-  } catch (err) {
+  } catch {
     return { error: 'Vision client initialization failed' };
   }
 
@@ -198,7 +198,7 @@ export async function detectLanguageFromTicket(
       source: 'ticket_scan',
       ticketData: extractedData,
     };
-  } catch (err: any) {
-    return { error: err.message || 'Vision chat communication failed' };
+  } catch (err) {
+    return { error: err instanceof Error && err.message ? err.message : 'Vision chat communication failed' };
   }
 }

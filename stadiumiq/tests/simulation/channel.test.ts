@@ -22,9 +22,9 @@ describe('createSimChannel resilience & validation', () => {
     const sim = createSimChannel(onMessage);
 
     expect(sim.channel).toBeNull();
-    // post/close must be callable and must not throw
-    expect(() => sim.post({ type: 'RESET', senderId: 's', timestamp: 1 })).not.toThrow();
-    expect(() => sim.close()).not.toThrow();
+    // post/close are safe no-ops: callable, return undefined (void), never throw.
+    expect(sim.post({ type: 'RESET', senderId: 's', timestamp: 1 })).toBeUndefined();
+    expect(sim.close()).toBeUndefined();
     expect(onMessage).not.toHaveBeenCalled();
   });
 
@@ -46,8 +46,8 @@ describe('createSimChannel resilience & validation', () => {
     const instance = created[0];
     expect(instance).toBeTruthy();
 
-    // Unknown / malformed payloads -> ignored, no throw
-    expect(() => instance.onmessage!({ data: { type: 'BOGUS' } } as MessageEvent)).not.toThrow();
+    // Unknown / malformed payloads -> ignored (onMessage never fires), no throw.
+    instance.onmessage!({ data: { type: 'BOGUS' } } as MessageEvent);
     instance.onmessage!({ data: null } as MessageEvent);
     instance.onmessage!({ data: 'not-an-object' } as unknown as MessageEvent);
     instance.onmessage!({ data: { type: 42 } } as unknown as MessageEvent);

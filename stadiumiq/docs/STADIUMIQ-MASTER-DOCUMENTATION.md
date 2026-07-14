@@ -176,8 +176,8 @@ StadiumIQ is architected around several cross-cutting visual, technical, and ope
   $$\text{density}(t) = \text{density}(f_0) + (\text{density}(f_1) - \text{density}(f_0)) \times \frac{t - t_0}{t_1 - t_0}$$
 * **Optimization Tradeoff**: Horizon scans in `getPeakCrush()` use $60\text{-second}$ steps, capturing all major peaks (due to 60s timeline intervals) while reducing computations by $98.3\%$ over a 60-minute window.
 * **Tool Registration**: Exposes `getForecast` and `getPeakCrush` schemas to F4. Relative inputs clamp to $[0, 7200]$ simulation seconds.
-* **Source Path**: `lib/engine/forecast.ts` and `lib/engine/forecastService.ts`
-* **Test Coverage**: `lib/engine/forecast.test.ts` (12 tests), `lib/engine/forecastService.test.ts` (5 tests)
+* **Source Path**: `lib/engine/forecast.ts` (consumed by `lib/ai/tools.ts` and `app/api/copilot/route.ts`)
+* **Test Coverage**: `lib/engine/forecast.test.ts` (12 tests)
 
 ### M8: Anti-Herding Load-Balancer
 * **Purpose**: Prevents recommendation herding by distributing sequential routing requests.
@@ -188,8 +188,8 @@ StadiumIQ is architected around several cross-cutting visual, technical, and ope
   $$\text{Gini} = \frac{\sum_{i=1}^n \sum_{j=1}^n |x_i - x_j|}{2 n \sum_{i=1}^n x_i}$$
 * **Harness proof**: 20 sequential requests from the North stand yields a naive herding Gini coefficient of $0.75$, dropping to $0.15$ when load-balancing is active (improvement ratio of **$5.0$**, exceeding the $1.3$ target threshold).
 * **Merit Bias Protection**: Capping the load term at $10$ ensures that a physical layout advantage (e.g. 10s vs 500s distance) is never overridden by routing penalties.
-* **Source Path**: `lib/engine/loadBalanceSimulation.ts`
-* **Test Coverage**: `lib/engine/loadBalanceSimulation.test.ts` (6 tests)
+* **Source Path**: `lib/engine/loadBalance.ts`
+* **Test Coverage**: `lib/engine/loadBalance.test.ts` (9 tests)
 
 ### M9: Smart Bribe Incentives
 * **Purpose**: Offers time-limited coupons at open concession/merch POIs to steer fans away from emerging bottlenecks.

@@ -18,24 +18,22 @@ export default function HomePage() {
   const role = useRoleStore((s) => s.role);
   const shouldReduceMotion = useReducedMotion();
   const location = useSimStore((s) => s.fanContext.location);
-  const ticket = useSimStore((s) => s.fanContext.ticket);
   const isOnboardingOverride = useSimStore((s) => s.isOnboardingOverride);
   const setIsOnboardingOverride = useSimStore((s) => s.setIsOnboardingOverride);
 
   // Map Ref for assistant actions
   const mapRef = React.useRef<StadiumMapHandle | null>(null);
 
-  // SOS state & handlers
+  // SOS state (triggering/clearing lives in Dashboard and SOSOverlay)
   const sos = useSimStore((s) => s.sos);
-  const triggerSos = useSimStore((s) => s.triggerSos);
-  const clearSos = useSimStore((s) => s.clearSos);
-  const [confirmOrganizerSos, setConfirmOrganizerSos] = React.useState(false);
   const [isMobile, setIsMobile] = React.useState(false);
   const [isBottomSheetOpen, setIsBottomSheetOpen] = React.useState(false);
   const [mounted, setMounted] = React.useState(false);
 
   React.useEffect(() => {
     setMounted(true);
+    // Storing a boolean (not the raw width) means React bails out of
+    // re-rendering on every resize event where the breakpoint didn't change.
     const handleResize = () => {
       setIsMobile(window.innerWidth < 768);
     };
@@ -43,27 +41,6 @@ export default function HomePage() {
     window.addEventListener("resize", handleResize);
     return () => {
       window.removeEventListener("resize", handleResize);
-    };
-  }, []);
-
-  const organizerTimeoutRef = React.useRef<any>(null);
-
-  const handleOrganizerSosClick = () => {
-    if (confirmOrganizerSos) {
-      triggerSos("organizer");
-      setConfirmOrganizerSos(false);
-      if (organizerTimeoutRef.current) clearTimeout(organizerTimeoutRef.current);
-    } else {
-      setConfirmOrganizerSos(true);
-      organizerTimeoutRef.current = setTimeout(() => {
-        setConfirmOrganizerSos(false);
-      }, 3000);
-    }
-  };
-
-  React.useEffect(() => {
-    return () => {
-      if (organizerTimeoutRef.current) clearTimeout(organizerTimeoutRef.current);
     };
   }, []);
 
@@ -94,7 +71,6 @@ export default function HomePage() {
   if (role === "fan") {
     // Fan View Layout
     const sectionLabel = location?.replace("sec-", "") || "";
-    const gateLabel = ticket?.gate.replace("gate-", "").toUpperCase() || "";
     const activeZone = ZONES.find((z) => z.id === location);
 
     if (isMobile) {
@@ -223,7 +199,6 @@ export default function HomePage() {
     );
   }
 
-  // Organizer View Layout
   // Organizer View Layout
   return (
     <Dashboard />

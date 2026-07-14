@@ -11,11 +11,13 @@ function getTierAndSectionNumber(zoneId: string): { tier: number; num: number } 
   return { tier, num };
 }
 
+// Ring sizes must match venue.ts TIERS: lower (tier 1) = 16 sections,
+// mid (tier 2) = 20, upper (tier 3) = 24.
 function getTierSize(tier: number): number {
-  if (tier === 1) return 24;
+  if (tier === 1) return 16;
   if (tier === 2) return 20;
-  if (tier === 3) return 16;
-  return 24; // default
+  if (tier === 3) return 24;
+  return 16; // default
 }
 
 /**

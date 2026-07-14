@@ -1,7 +1,6 @@
 import { SimState, UploadDataset } from '../types';
 
 export type ChannelMessage =
-  | { type: 'STATE_SYNC'; payload: SimState; senderId: string; timestamp: number }
   | { type: 'HEARTBEAT'; zoneId: string; sessionId: string; timestamp: number }
   | { type: 'SCENARIO'; patch: Partial<SimState>; senderId: string; timestamp: number }
   | { type: 'RESET'; senderId: string; timestamp: number }
@@ -64,22 +63,21 @@ export function createSimChannel(
   }
 }
 
-function isValidChannelMessage(msg: any): msg is ChannelMessage {
-  if (!msg || typeof msg !== 'object') return false;
+function isValidChannelMessage(value: unknown): value is ChannelMessage {
+  if (!value || typeof value !== 'object') return false;
+  const msg = value as Record<string, unknown>;
   if (typeof msg.type !== 'string') return false;
   if (typeof msg.timestamp !== 'number') return false;
 
   switch (msg.type) {
-    case 'STATE_SYNC':
-      return typeof msg.senderId === 'string' && msg.payload && typeof msg.payload === 'object' && typeof msg.payload.matchClockSec === 'number';
     case 'HEARTBEAT':
       return typeof msg.zoneId === 'string' && typeof msg.sessionId === 'string';
     case 'SCENARIO':
-      return typeof msg.senderId === 'string' && msg.patch && typeof msg.patch === 'object';
+      return typeof msg.senderId === 'string' && !!msg.patch && typeof msg.patch === 'object';
     case 'RESET':
       return typeof msg.senderId === 'string';
     case 'IMPORT':
-      return typeof msg.senderId === 'string' && msg.dataset && typeof msg.dataset === 'object';
+      return typeof msg.senderId === 'string' && !!msg.dataset && typeof msg.dataset === 'object';
     case 'sos_trigger':
     case 'sos_clear':
       return typeof msg.senderId === 'string' && (msg.triggeredBy === 'fan' || msg.triggeredBy === 'organizer') && typeof msg.atSec === 'number';

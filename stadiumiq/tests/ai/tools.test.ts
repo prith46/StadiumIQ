@@ -218,11 +218,12 @@ describe('AI Tools Registry', () => {
     expect(result.path[0]).toBe('sec-101');
   });
 
-  // 5. Remaining stubs return their placeholder schemas
-  it('stub tools return correct shape with __stub: true', async () => {
+  // 5. getIncentive returns an explicit "not found" contract when no incentive is active
+  it('getIncentive returns found: false with a message when no incentive is active', async () => {
     const incentiveRes: any = await executeTool('getIncentive', { fromZoneId: 'sec-101' }, ctx);
-    expect(incentiveRes.__stub).toBe(true);
+    expect(incentiveRes.found).toBe(false);
     expect(incentiveRes.fromZone).toBe('sec-101');
+    expect(typeof incentiveRes.message).toBe('string');
   });
 
   // 6. Real Forecast and Peak Crush Tools

@@ -16,11 +16,19 @@ export interface FlowVector {
  * tick-over-tick density delta. No store/React imports (lib/engine/* rule).
  */
 export function computeFlowVectors(
-  currentDensity: Record<string, number>,
-  previousDensity: Record<string, number>,
+  currentDensity: Record<string, number> | undefined | null,
+  previousDensity: Record<string, number> | undefined | null,
   edges: Edge[]
 ): FlowVector[] {
   const vectors: FlowVector[] = [];
+
+  // Guard: during the loading/shimmer state either density map may be
+  // undefined. Without this, `currentDensity[edge.to]` throws (the `?? 0`
+  // below only guards a missing VALUE, not a missing MAP). No delta can be
+  // derived without both snapshots, so return no vectors.
+  if (!currentDensity || !previousDensity) {
+    return vectors;
+  }
 
   for (const edge of edges) {
     const flow = (currentDensity[edge.to] ?? 0) - (previousDensity[edge.to] ?? 0);

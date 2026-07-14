@@ -33,11 +33,33 @@ const DELIMITER_TAGS = [
 ];
 
 /**
+ * Common prompt-injection idioms — imperative attempts to override the system
+ * prompt or exfiltrate it. These are deliberately multi-word and specific so
+ * they don't touch legitimate fan phrasing: "ignore the previous gate" or
+ * "forget about the queue" do NOT match (only override targets like
+ * "instructions"/"prompt"/"system prompt" do).
+ */
+const INJECTION_PATTERNS: RegExp[] = [
+  /ignore\s+(?:all\s+|the\s+|any\s+|your\s+)*(?:previous|above|prior|earlier|preceding|foregoing)\s+(?:instruction|prompt|message|context|direction|rule)s?/gi,
+  /disregard\s+(?:all\s+|the\s+|any\s+|your\s+)*(?:previous|above|prior|earlier|system)\s*(?:instruction|prompt|message|context|direction|rule)s?/gi,
+  /forget\s+(?:everything|all|the\s+above|(?:the\s+|your\s+|all\s+)?previous\s+(?:instruction|prompt|message|context)s?|your\s+(?:instruction|prompt|rule)s?)/gi,
+  /(?:reveal|show|print|repeat|output|expose|leak|reprint|display)\s+(?:me\s+)?(?:your|the)\s+(?:system\s+|initial\s+|original\s+)?(?:prompt|instruction|rule)s?/gi,
+  /you\s+are\s+now\s+(?:a\b|an\b|the\b|no\s+longer\b|going\s+to\b)/gi,
+];
+
+/**
  * Strip every block-delimiter tag (open and close variants, case-insensitive)
- * from user-supplied text, replacing each match with [filtered].
+ * from user-supplied text AND neutralize common prompt-injection override
+ * idioms, replacing each match with [filtered].
  *
- * This prevents any user-controlled text from escaping its surrounding XML
- * block and injecting additional prompt instructions.
+ * Two layers of defense:
+ *  1. Block-delimiter tags: prevents user text from escaping its surrounding
+ *     XML block and injecting additional prompt instructions.
+ *  2. Injection idioms: neutralizes free-text "ignore previous instructions" /
+ *     "reveal your system prompt"-style overrides that carry no tag but still
+ *     attempt to hijack the model. (Best-effort — the system prompt remains the
+ *     primary defense; this reduces the attack surface without over-matching
+ *     legitimate messages.)
  */
 export function sanitizeUserInput(text: string): string {
   let result = text;
@@ -46,6 +68,9 @@ export function sanitizeUserInput(text: string): string {
     result = result.replace(new RegExp(`<${tag}(?:\\s[^>]*)?>`, 'gi'), '[filtered]');
     // Closing tag: </tag>
     result = result.replace(new RegExp(`<\\/${tag}>`, 'gi'), '[filtered]');
+  }
+  for (const pattern of INJECTION_PATTERNS) {
+    result = result.replace(pattern, '[filtered]');
   }
   return result;
 }

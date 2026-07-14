@@ -18,6 +18,7 @@ export const AlertStackComponent: React.FC<AlertStackProps> = ({
   filterKinds,
 }) => {
   const activeAlerts = useProactiveAlerts();
+
   const dismissAlert = useAlertStore((s) => s.dismissAlert);
 
   const alertsToRender = filterKinds

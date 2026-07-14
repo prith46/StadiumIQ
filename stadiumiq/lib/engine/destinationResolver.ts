@@ -34,14 +34,18 @@ export type ResolveError =
 /**
  * Resolve a DestinationQuery into a concrete zone id.
  *
+ * Ranking is deliberately distance-plus-routed-load only — live density is
+ * NOT an input here. Congestion influences the route chosen TO a destination
+ * (computeRoute), not which destination is picked.
+ *
  * @param query          What the fan wants to reach
  * @param originZoneId   Fan's current zone (used for distance ranking)
  * @param edges          EDGES from venue.ts (used to build distance graph)
  * @param zones          ZONES from venue.ts
  * @param pois           POIS from venue.ts (or a filtered subset)
- * @param density        Live density per zone (used to prefer less crowded POI zones)
  * @param poiStatus      Live status overrides keyed by poi.id (merged with poi.status)
  * @param gateStatus     Live gate status map (needed for nearestExit)
+ * @param routedLoad     M8 herding signal, folded into the distance weighting
  */
 export function resolveDestination(
   query: DestinationQuery,
@@ -49,7 +53,6 @@ export function resolveDestination(
   edges: Edge[],
   zones: Zone[],
   pois: Poi[],
-  density: Record<string, number> = {},
   poiStatus: Record<string, Poi['status']> = {},
   gateStatus: Record<string, 'open' | 'congested' | 'closed'> = {},
   routedLoad: Record<string, number> = {}

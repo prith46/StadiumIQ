@@ -7,6 +7,7 @@ import React, {
   useState,
   useRef,
   useEffect,
+  useCallback,
   memo
 } from "react";
 import { motion } from "framer-motion";
@@ -100,12 +101,14 @@ function getStatusText(densityVal: number | undefined): string {
   return "Crowded";
 }
 
-// Optimized subcomponent for rendering seating sections to prevent global re-renders
+// Optimized subcomponent for rendering seating sections to prevent global re-renders.
+// Takes a stable `onSelect(zoneId)` callback (NOT a per-section inline closure) so
+// the memo() below actually holds when the parent re-renders on a sim tick.
 interface SectionShapeProps {
   id: string;
   d: string;
   density: number | undefined;
-  onClick?: (e: React.MouseEvent<SVGPathElement> | React.KeyboardEvent<SVGPathElement>) => void;
+  onSelect?: (zoneId: string) => void;
   ariaLabel: string;
 }
 
@@ -113,7 +116,7 @@ const SectionShapeComponent: React.FC<SectionShapeProps> = ({
   id,
   d,
   density,
-  onClick,
+  onSelect,
   ariaLabel,
 }) => {
   const isPending = density === undefined;
@@ -126,18 +129,18 @@ const SectionShapeComponent: React.FC<SectionShapeProps> = ({
       id={id}
       d={d}
       fill={fillColor}
-      className={isPending ? "shimmer-active" : "transition-colors-all"}
+      className={`map-interactive ${isPending ? "shimmer-active" : "transition-colors-all"}`}
       style={{
         stroke: strokeColor,
         strokeWidth: "0.8px",
         cursor: "pointer",
         transition: "fill 0.2s ease, stroke 0.2s ease, filter 0.2s ease",
       }}
-      onClick={onClick}
+      onClick={() => onSelect?.(id)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          onClick?.(e);
+          onSelect?.(id);
         }
       }}
       tabIndex={0}
@@ -149,7 +152,10 @@ const SectionShapeComponent: React.FC<SectionShapeProps> = ({
 
 const SectionShape = memo(SectionShapeComponent);
 
-export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
+// memo(): parents that re-render on every 1s clock tick (e.g. the organizer
+// Dashboard) must not cascade into the map when its own props are stable —
+// the map re-renders from its OWN store subscriptions when live data changes.
+export const StadiumMap = memo(forwardRef<StadiumMapHandle, StadiumMapProps>(
   (props, ref) => {
     const {
       mode: modeProp,
@@ -163,7 +169,19 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
     } = props;
     // §22.10 aliases resolved to a single value each — see StadiumMapProps doc comment.
     const mode = modeProp ?? role ?? 'fan';
+
     const currentZoneId = currentZoneIdProp ?? youAreHere;
+
+    // Stable section-select callback: reads the latest onZoneClick through a
+    // ref so its identity NEVER changes — a per-render inline closure here
+    // would defeat SectionShape's memo() for all 60 sections on every tick.
+    const onZoneClickRef = useRef(onZoneClick);
+    useEffect(() => {
+      onZoneClickRef.current = onZoneClick;
+    });
+    const handleSectionSelect = useCallback((zoneId: string) => {
+      onZoneClickRef.current?.(zoneId);
+    }, []);
 
     // 1. Reactive subscription to simulation density and gateStatus
     const density = useSimStore((s) => s.density);
@@ -176,8 +194,18 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
 
     // M22: raw per-tick flow vectors, then retained for 2 ticks after dropping
     // below FLOW_THRESHOLD so arrows fade instead of flickering off instantly.
+    // Deps are as tight as possible: [density, previousDensity] are the only
+    // inputs (EDGES is a module constant), so this recomputes at most once per
+    // sim tick — when the store publishes a new density snapshot — not on
+    // unrelated re-renders. Full per-edge incremental diffing was left out of
+    // scope on purpose: the O(edges) recompute is cheap (a few hundred edges)
+    // and the flow-fade retention effect below reads the complete vector set
+    // each tick, so incremental updates would add correctness risk for no gain.
+    // Defensive: density/previousDensity are undefined during the loading
+    // (shimmer) state; computeFlowVectors also guards internally, but pass safe
+    // empty maps so the memo never hands it an undefined snapshot.
     const rawFlowVectors = useMemo(
-      () => computeFlowVectors(density, previousDensity, EDGES),
+      () => computeFlowVectors(density ?? {}, previousDensity ?? {}, EDGES),
       [density, previousDensity]
     );
     const flowFadeMapRef = useRef<Map<string, { vector: FlowVector; ticksLeft: number }>>(new Map());
@@ -194,7 +222,10 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
           if (entry.ticksLeft <= 0) map.delete(id);
         }
       }
-      setFlowVectors(Array.from(map.values()).map((e) => e.vector));
+      // Keep the previous (empty) array identity when there are no vectors —
+      // returning the same reference lets React bail out of the extra
+      // post-effect re-render this setState otherwise forces every tick.
+      setFlowVectors((prev) => (prev.length === 0 && map.size === 0 ? prev : Array.from(map.values()).map((e) => e.vector)));
     }, [rawFlowVectors]);
 
     // 2. Internal overlay states managed imperatively via ref
@@ -353,6 +384,16 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
               stroke-width: 1.5px !important;
               filter: brightness(1.05);
             }
+            /* Visible keyboard-focus indicator for interactive map elements
+               (sections, gates, transit, POIs). Sections/gates are SVG so use a
+               stroke change; the outline covers the HTML POI markers and acts as
+               a fallback. */
+            .map-interactive:focus-visible {
+              outline: 2.5px solid var(--color-accent);
+              outline-offset: 1px;
+              stroke: var(--color-accent) !important;
+              stroke-width: 2.5px !important;
+            }
             @keyframes pulse-ring {
               0% { r: 7px; opacity: 0.4; }
               100% { r: 14px; opacity: 0; }
@@ -467,7 +508,7 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
                           id={pathObj.id}
                           d={pathObj.d}
                           density={dVal}
-                          onClick={() => onZoneClick?.(pathObj.id)}
+                          onSelect={handleSectionSelect}
                           ariaLabel={labelText}
                         />
                       }
@@ -569,7 +610,7 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
                         <g
                           id={gate.id}
                           transform={`translate(${p.x}, ${p.y})`}
-                          className="cursor-pointer"
+                          className="cursor-pointer map-interactive"
                           onClick={() => onZoneClick?.(gate.id)}
                           onKeyDown={(e) => {
                             if (e.key === "Enter" || e.key === " ") {
@@ -617,7 +658,7 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
                         <g
                           id={transit.id}
                           transform={`translate(${p.x}, ${p.y})`}
-                          className="cursor-pointer"
+                          className="cursor-pointer map-interactive"
                           onClick={() => onZoneClick?.(transit.id)}
                           onKeyDown={(e) => {
                             if (e.key === "Enter" || e.key === " ") {
@@ -876,6 +917,7 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
                 <div
                   key={poi.id}
                   id={poi.id}
+                  className="map-interactive"
                   role="button"
                   tabIndex={0}
                   title={poi.label}
@@ -999,6 +1041,6 @@ export const StadiumMap = forwardRef<StadiumMapHandle, StadiumMapProps>(
       </TooltipProvider>
     );
   }
-);
+));
 
 StadiumMap.displayName = "StadiumMap";

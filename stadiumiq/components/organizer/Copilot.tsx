@@ -120,16 +120,12 @@ function formatForecastMessage(forecast: Forecast, matchClockSec: number): strin
   return lines.join('\n');
 }
 
-export function Copilot() {
-  // Simulation snapshot attributes required for grounding
-  const density = useSimStore((s) => s.density || {});
-  const incidents = useSimStore((s) => s.incidents || []);
-  const gateStatus = useSimStore((s) => s.gateStatus || {});
-  const routedLoad = useSimStore((s) => s.routedLoad || {});
-  const sensorCounts = useSimStore((s) => s.sensorCounts || {});
-  const matchClockSec = useSimStore((s) => s.matchClockSec || 0);
-  const timeline = useSimStore((s) => s.timeline || []);
+// memo(): no props — after dropping the per-tick store subscriptions above,
+// the only thing that could still re-render this every second is the parent
+// Dashboard's clock tick; memo blocks that cascade.
+export const Copilot = React.memo(CopilotComponent);
 
+function CopilotComponent() {
   // Fix 3: a single scrollable chat thread (same Message shape/components as
   // M2's Fan assistant panel) replaces the old two-mode brief/forecast state.
   const [messages, setMessages] = useState<Message[]>([]);
@@ -138,15 +134,21 @@ export function Copilot() {
   const [error, setError] = useState('');
   const [lastAction, setLastAction] = useState<{ kind: 'query'; text: string } | { kind: 'forecast' } | null>(null);
 
-  const getSnapshot = () => ({
-    matchClockSec,
-    density,
-    gateStatus,
-    incidents,
-    routedLoad,
-    sensorCounts,
-    timeline,
-  });
+  // The simulation snapshot is only needed AT REQUEST TIME — reading it via
+  // getState() here (instead of 7 per-tick store subscriptions) means the
+  // Copilot no longer re-renders on every 1s sequencer tick.
+  const getSnapshot = () => {
+    const s = useSimStore.getState();
+    return {
+      matchClockSec: s.matchClockSec,
+      density: s.density,
+      gateStatus: s.gateStatus,
+      incidents: s.incidents,
+      routedLoad: s.routedLoad,
+      sensorCounts: s.sensorCounts,
+      timeline: s.timeline,
+    };
+  };
 
   const appendMessage = (role: Message['role'], content: string) => {
     setMessages((prev) => [
@@ -183,9 +185,9 @@ export function Copilot() {
       if (data.error) throw new Error(data.error);
 
       appendMessage('assistant', formatBriefMessage(data));
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
-      setError(err.message || 'Failed to retrieve copilot brief.');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to retrieve copilot brief.');
     } finally {
       setLoading(false);
     }
@@ -214,10 +216,10 @@ export function Copilot() {
       const data = await res.json();
       if (data.error) throw new Error(data.error);
 
-      appendMessage('assistant', formatForecastMessage(data, matchClockSec));
-    } catch (err: any) {
+      appendMessage('assistant', formatForecastMessage(data, useSimStore.getState().matchClockSec));
+    } catch (err) {
       console.error(err);
-      setError(err.message || 'Failed to retrieve forecast brief.');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to retrieve forecast brief.');
     } finally {
       setLoading(false);
     }

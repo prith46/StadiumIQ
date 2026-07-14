@@ -82,7 +82,7 @@ export function CameraQrScan({ onScan, onError, onCancel }: CameraQrScanProps) {
         if (cancelled) return;
         setStatus('scanning');
         rafRef.current = requestAnimationFrame(scanLoop);
-      } catch (err) {
+      } catch {
         if (!cancelled) {
           setCameraError("Couldn't access your camera. Check permissions and try again.");
           setStatus('error');

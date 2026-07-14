@@ -2,6 +2,7 @@ import { createClient, ChatMessage } from './client';
 import { Incident, DensityFrame } from '../types';
 import { findPeakCrush, forecastAt } from '../engine/forecast';
 import { sanitizeUserInput } from './sanitize';
+import { parseLlmJson } from './parseLlmJson';
 
 export interface CopilotQueryInput {
   query: string;
@@ -45,13 +46,15 @@ export async function getCopilotBrief(
       id: inc.id,
       type: inc.type,
       zone: inc.zoneId,
-      note: inc.note,
+      // Incident notes are fan-authored free text — strip prompt-block
+      // delimiters so a note can't break out of <stadium_snapshot>.
+      note: sanitizeUserInput(inc.note),
       status: inc.status,
     }))
     .slice(0, 10); // cap at 10 active incidents
 
   const hotZones = Object.entries(input.density)
-    .filter(([_, density]) => density >= 0.5)
+    .filter(([, density]) => density >= 0.5)
     .map(([zoneId, density]) => ({ zoneId, density }))
     .sort((a, b) => b.density - a.density)
     .slice(0, 5); // top 5 hot zones
@@ -62,7 +65,7 @@ export async function getCopilotBrief(
   }));
 
   const systemPrompt =
-    'You are the MetLife Stadium AI Ops Assistant (Copilot).\n' +
+    'You are the StadiumIQ AI Ops Assistant (Copilot) for MetLife Stadium.\n' +
     'Evaluate the provided stadium snapshot and user query. ' +
     'You must respond ONLY with a raw JSON object containing three fields:\n' +
     '1. "summary" (string): brief paragraph overview of the stadium situation.\n' +
@@ -88,22 +91,39 @@ export async function getCopilotBrief(
   try {
     const client = createClient();
     const result = await client.chat(messages, []);
-    
-    let text = (result.text || '').trim();
-    // Strip markdown code block wrapper if present
-    if (text.startsWith('```')) {
-      text = text.replace(/^```[a-zA-Z]*\n/, '').replace(/\n```$/, '').trim();
-    }
 
-    const brief: CopilotBrief = JSON.parse(text);
-    if (!brief.summary || !Array.isArray(brief.topRisks) || !Array.isArray(brief.recommendedActions)) {
+    // Field-level validation of the model's JSON: salvage well-formed risk
+    // entries, drop malformed ones, and clamp priority to the 1|2|3 contract
+    // instead of trusting the cast.
+    const parsed = parseLlmJson(result.text) as Partial<CopilotBrief>;
+    if (
+      typeof parsed.summary !== 'string' || !parsed.summary ||
+      !Array.isArray(parsed.topRisks) ||
+      !Array.isArray(parsed.recommendedActions) ||
+      !parsed.recommendedActions.every((a) => typeof a === 'string')
+    ) {
       throw new Error('Malformed JSON structure');
     }
-    return brief;
-  } catch (err: any) {
-    // Resilient fallback brief
+
+    const topRisks: CopilotBrief['topRisks'] = [];
+    for (const item of parsed.topRisks as unknown[]) {
+      if (!item || typeof item !== 'object') continue;
+      const risk = item as { description?: unknown; zoneId?: unknown; priority?: unknown };
+      if (typeof risk.description !== 'string') continue;
+      topRisks.push({
+        description: risk.description,
+        zoneId: typeof risk.zoneId === 'string' ? risk.zoneId : undefined,
+        priority: risk.priority === 1 || risk.priority === 3 ? risk.priority : 2,
+      });
+    }
+
+    return { summary: parsed.summary, topRisks, recommendedActions: parsed.recommendedActions };
+  } catch {
+    // Resilient fallback brief, built deterministically from the real
+    // incident summary — and honest about being a fallback.
     return {
-      summary: 'MetLife Stadium operations brief loaded from fallback cache. Primary system is stable.',
+      summary:
+        'Live AI brief unavailable — this is a deterministic fallback compiled from current incident data.',
       topRisks: activeIncidents.map((inc) => ({
         description: `Unresolved incident reported: ${inc.note}`,
         zoneId: inc.zone,
@@ -132,11 +152,11 @@ export async function getForecastBrief(
   // 2. Deterministic calculation: Specific densities at exactly 15 minutes lookahead
   const forecastResult = forecastAt(input.timeline, input.matchClockSec, 900);
   const hotZonesAtForecast = Object.entries(forecastResult.density || {})
-    .filter(([_, density]) => density >= 0.5)
+    .filter(([, density]) => density >= 0.5)
     .map(([zoneId, density]) => ({ zoneId, density }));
 
   const systemPrompt =
-    'You are the MetLife Stadium AI Ops Assistant (Copilot).\n' +
+    'You are the StadiumIQ AI Ops Assistant (Copilot) for MetLife Stadium.\n' +
     'Your task is to write a brief explanation of a pre-calculated crowd forecast snapshot.\n' +
     'CRITICAL: You are strictly forbidden from inventing or changing any numbers. Use only the provided peak times and densities.\n' +
     'Respond ONLY with a raw JSON object containing:\n' +
@@ -172,12 +192,7 @@ export async function getForecastBrief(
     const client = createClient();
     const result = await client.chat(messages, []);
 
-    let text = (result.text || '').trim();
-    if (text.startsWith('```')) {
-      text = text.replace(/^```[a-zA-Z]*\n/, '').replace(/\n```$/, '').trim();
-    }
-
-    const parsed = JSON.parse(text);
+    const parsed = parseLlmJson(result.text) as { narrative?: string; staffingRecommendation?: string };
     if (!parsed.narrative || !parsed.staffingRecommendation) {
       throw new Error('Malformed JSON structure');
     }
@@ -188,7 +203,7 @@ export async function getForecastBrief(
       narrative: parsed.narrative,
       staffingRecommendation: parsed.staffingRecommendation,
     };
-  } catch (err: any) {
+  } catch {
     // Resilient fallback forecast brief
     // Fix 7: `secs % 60` on a non-integer `peakAtSec` (e.g. an interpolated
     // timeline timestamp) produced raw floats like "01:0.9990000000000023" —

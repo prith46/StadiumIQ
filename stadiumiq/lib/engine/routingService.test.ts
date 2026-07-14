@@ -1,11 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useSimStore } from '../store/simStore';
-import { decayRoutedLoad, tickSimulation, DEFAULT_SIM_CONFIG } from '../simulation/engine';
+import { decayRoutedLoad } from '../simulation/engine';
 import { computeRoute } from './routing';
 import { computeServiceRoute } from './routingService';
 import * as routingModule from './routing';
 import { EDGES, ZONES } from '../venue/venue';
-import type { SimState } from '../types';
 
 describe('Routing Service & Simulation Reset Integration', () => {
   // ---------------------------------------------------------------------------
@@ -34,44 +33,10 @@ describe('Routing Service & Simulation Reset Integration', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // 2. Phase Boundary Reset
+  // 2. Phase Boundary Reset — routedLoad reset semantics now live in the M29
+  // sequencer tick (see tests/simulation/store.test.ts, "decays routedLoad
+  // each sequencer tick and resets it across phase boundaries").
   // ---------------------------------------------------------------------------
-
-  it('resets routedLoad to empty across major match phase boundaries', () => {
-    const dummyState: SimState = {
-      matchClockSec: 2680, // In first half (ends at 2700)
-      density: {},
-      gateStatus: {},
-      incidents: [],
-      routedLoad: { 'gate-a': 5.0, 'gate-b': 3.0 },
-      sensorCounts: {},
-      timeline: [],
-    };
-
-    // tickSimulation advances clock by 45s to 2725 (Halftime phase)
-    const next = tickSimulation(dummyState, ZONES, DEFAULT_SIM_CONFIG);
-    expect(next.matchClockSec).toBe(2725);
-    // Since it transitioned firstHalf -> half, routedLoad MUST be cleared
-    expect(Object.keys(next.routedLoad).length).toBe(0);
-  });
-
-  it('does NOT reset routedLoad when ticking within the same phase', () => {
-    const dummyState: SimState = {
-      matchClockSec: 100, // In first half
-      density: {},
-      gateStatus: {},
-      incidents: [],
-      routedLoad: { 'gate-a': 10.0 },
-      sensorCounts: {},
-      timeline: [],
-    };
-
-    // tickSimulation advances to 145 (still first half)
-    const next = tickSimulation(dummyState, ZONES, DEFAULT_SIM_CONFIG);
-    expect(next.matchClockSec).toBe(145);
-    // Decays but does NOT reset
-    expect(next.routedLoad['gate-a']).toBe(9.0);
-  });
 
   // ---------------------------------------------------------------------------
   // 3. Reason avoidedGates Under Herding Load

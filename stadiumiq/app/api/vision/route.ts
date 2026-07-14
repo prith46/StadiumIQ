@@ -1,45 +1,49 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { detectLanguageFromTicket } from '@/lib/ai/languageDetection';
+import { fanContextSchema } from '@/lib/validation/fanContext';
+import { allowRequest } from '@/lib/server/rateLimit';
+import { readJsonBody } from '@/lib/server/readJsonBody';
+
+// Hard body cap, enforced while streaming: a 5MB image is ~6.7MB of base64,
+// plus JSON envelope headroom.
+const BODY_MAX_BYTES = 8 * 1024 * 1024;
 
 const requestSchema = z.object({
   imageBase64: z.string(),
   mimeType: z.enum(['image/jpeg', 'image/png']),
-  fanContext: z.object({
-    language: z.string(),
-    accessibility: z.boolean(),
-    location: z.string().optional(),
-    group: z.enum(['solo', 'family', 'group']).optional(),
-    leavingEarly: z.boolean().optional(),
-    ticket: z.object({
-      section: z.string(),
-      gate: z.string(),
-      nationality: z.string(),
-      countryCode: z.string(),
-      seat: z.string().optional(),
-    }).optional(),
-  }),
+  fanContext: fanContextSchema,
 }).strict();
 
 export async function POST(req: Request) {
-  let body: any;
-  try {
-    body = await req.json();
-  } catch (err) {
-    return NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 });
+  if (!allowRequest('vision', req)) {
+    return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
   }
 
-  const result = requestSchema.safeParse(body);
+  const read = await readJsonBody(req, BODY_MAX_BYTES);
+  if (!read.ok) {
+    return read.reason === 'too_large'
+      ? NextResponse.json({ error: 'Payload too large' }, { status: 413 })
+      : NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 });
+  }
+
+  const result = requestSchema.safeParse(read.body);
   if (!result.success) {
     return NextResponse.json({ error: 'Invalid request payload' }, { status: 400 });
   }
 
   const validated = result.data;
-  
-  // Validate base64 decoded size <= 5MB
+
+  // Size check FIRST (cheap length arithmetic) — never run the base64 regex
+  // over a payload that is already too large to accept.
   const approximateBytes = (validated.imageBase64.length * 3) / 4;
   if (approximateBytes > 5 * 1024 * 1024) {
     return NextResponse.json({ error: 'Payload too large: Image exceeds 5MB' }, { status: 400 });
+  }
+
+  // Validate the payload is actually base64 before forwarding to the provider
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(validated.imageBase64)) {
+    return NextResponse.json({ error: 'Invalid image encoding: expected base64' }, { status: 400 });
   }
 
   // Graceful fallback response when vision is unsupported or fails

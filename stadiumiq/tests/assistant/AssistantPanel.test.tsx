@@ -5,6 +5,9 @@ import { AssistantPanel } from '../../components/assistant/AssistantPanel';
 import * as client from '../../lib/assistant/client';
 import { StadiumMapHandle } from '../../lib/assistant/mapActionDispatcher';
 import { useSimStore } from '../../lib/store/simStore';
+import { useChatStore } from '../../lib/store/chatStore';
+import { useA11yStore } from '../../lib/store/a11yStore';
+import { speak } from '../../lib/voice/speechSynthesis';
 
 // Mock the API client function
 vi.mock('../../lib/assistant/client', () => {
@@ -12,6 +15,13 @@ vi.mock('../../lib/assistant/client', () => {
     sendAssistantMessage: vi.fn(),
   };
 });
+
+// Mock the TTS layer so the a11y end-to-end test can assert it is invoked
+// without touching the browser SpeechSynthesis API.
+vi.mock('../../lib/voice/speechSynthesis', () => ({
+  speak: vi.fn(() => true),
+  stopSpeaking: vi.fn(),
+}));
 
 // Mock prefers-reduced-motion to false
 vi.mock("framer-motion", async (importOriginal) => {
@@ -32,6 +42,17 @@ describe('AssistantPanel Chat Component', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.mocked(client.sendAssistantMessage).mockReset();
+
+    // Reset the module-level chat store between tests. Without this, messages
+    // sent by earlier tests leak into later ones — the panel is no longer in
+    // its empty state, so the quick-action chips (only shown when empty) are
+    // absent and their lookups fail. This is the test-isolation fix (not an
+    // assertion patch) for the flaky "quick action chip" test.
+    useChatStore.setState({ messages: [] });
+
+    // TTS defaults off; reset the mock and store so a11y test isolation holds.
+    useA11yStore.setState({ ttsEnabled: false });
+    vi.mocked(speak).mockClear();
 
     mockHighlight.mockReset();
     mockRoute.mockReset();
@@ -259,5 +280,34 @@ describe('AssistantPanel Chat Component', () => {
 
     // 4. Quick Action Chips are hidden
     expect(screen.queryByText('Find nearest exit')).not.toBeInTheDocument();
+  });
+
+  it('speaks the assistant reply via TTS end-to-end when TTS is enabled (a11y)', () => {
+    useA11yStore.setState({ ttsEnabled: true });
+    vi.mocked(client.sendAssistantMessage).mockImplementation((req, options) => {
+      options.onComplete({
+        message: 'The nearest restroom is behind Section 214.',
+        language: 'en',
+        mapActions: [],
+        alertLevel: 'none',
+      });
+      return Promise.resolve();
+    });
+
+    render(<AssistantPanel mapRef={mapRef} />);
+
+    const input = screen.getByLabelText('Message the assistant');
+    const sendButton = screen.getByLabelText('Send message');
+
+    fireEvent.change(input, { target: { value: 'where is the restroom?' } });
+    fireEvent.click(sendButton);
+
+    // TTS is invoked end-to-end (UI completion -> speechSynthesis wrapper) with
+    // the assistant's reply and the fan's resolved locale tag.
+    expect(vi.mocked(speak)).toHaveBeenCalledWith(
+      'The nearest restroom is behind Section 214.',
+      expect.any(String),
+      expect.any(Function)
+    );
   });
 });

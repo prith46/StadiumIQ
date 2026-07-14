@@ -1,5 +1,9 @@
 import { useSimStore } from '../store/simStore';
-import { FanContext } from '../types';
+import { useIncentiveStore } from '../store/incentiveStore';
+import { TIMELINE_FRAME_STEP_SEC } from '../simulation/engine';
+import { FanContext, AssistantResponse } from '../types';
+
+export type { AssistantResponse } from '../types';
 
 export interface AssistantRequest {
   message: string;
@@ -7,18 +11,31 @@ export interface AssistantRequest {
   fanContext: FanContext;
 }
 
-export interface AssistantResponse {
-  message: string;
-  language: string;
-  mapActions: Array<{ op: 'highlight' | 'route' | 'pin'; zoneId?: string; path?: string[] }>;
-  alertLevel: 'none' | 'info' | 'warn' | 'critical';
-  meta?: { tool?: string; stress?: boolean };
+// Token-efficiency caps for the conversation history sent to the server:
+// only the most recent turns, each truncated, so long chats don't balloon
+// the prompt.
+const HISTORY_MAX_TURNS = 8;
+const HISTORY_MAX_CHARS_PER_TURN = 600;
+
+function buildHistoryPayload(req: AssistantRequest): AssistantRequest['history'] {
+  const history = req.history
+    .filter((m) => m.content.trim().length > 0)
+    .slice(-HISTORY_MAX_TURNS)
+    .map((m) => ({ role: m.role, content: m.content.slice(0, HISTORY_MAX_CHARS_PER_TURN) }));
+
+  // The panel's message list may already contain the message being sent
+  // (it is appended to the UI before the request fires) — drop it from
+  // history so the model doesn't see the current question twice.
+  const last = history[history.length - 1];
+  if (last && last.role === 'user' && last.content === req.message.slice(0, HISTORY_MAX_CHARS_PER_TURN)) {
+    history.pop();
+  }
+  return history;
 }
 
 export async function sendAssistantMessage(
   req: AssistantRequest,
   options: {
-    onToken?: (partial: string) => void;
     onComplete: (full: AssistantResponse) => void;
     onError: (err: Error) => void;
   }
@@ -30,6 +47,15 @@ export async function sendAssistantMessage(
 
   try {
     const simStoreState = useSimStore.getState();
+    // Payload efficiency: the fan assistant's forecast tools only look forward
+    // from the current match clock, so frames already behind us are dead
+    // weight reserialized on every chat message. Keep one frame of lookback so
+    // nearest-frame lookups at exactly "now" still have a bracketing frame.
+    // (The copilot/debrief call sites intentionally send the full timeline —
+    // root-cause tracing and debrief aggregation read history.)
+    const timeline = (simStoreState.timeline || []).filter(
+      (frame) => frame.atSec >= simStoreState.matchClockSec - TIMELINE_FRAME_STEP_SEC
+    );
     const simSnapshot = {
       matchClockSec: simStoreState.matchClockSec,
       density: simStoreState.density,
@@ -37,7 +63,7 @@ export async function sendAssistantMessage(
       incidents: simStoreState.incidents,
       routedLoad: simStoreState.routedLoad,
       sensorCounts: simStoreState.sensorCounts,
-      timeline: simStoreState.timeline || [],
+      timeline,
     };
 
     const response = await fetch('/api/assistant', {
@@ -47,8 +73,12 @@ export async function sendAssistantMessage(
       },
       body: JSON.stringify({
         message: req.message,
+        history: buildHistoryPayload(req),
         fanContext: req.fanContext,
         simSnapshot,
+        // The fan's live incentives exist only in this browser tab's store, so
+        // they ride along with the request for the getIncentive tool to read.
+        activeIncentives: useIncentiveStore.getState().activeIncentives,
       }),
       signal: controller.signal,
     });
@@ -59,82 +89,23 @@ export async function sendAssistantMessage(
       throw new Error(`Server returned status ${response.status}`);
     }
 
-    const contentType = response.headers.get('Content-Type') || '';
-
-    if (contentType.includes('text/event-stream')) {
-      const reader = response.body?.getReader();
-      if (!reader) {
-        throw new Error('Response body stream reader is not available');
-      }
-
-      const decoder = new TextDecoder();
-      let fullText = '';
-      let finalResult: AssistantResponse | null = null;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n');
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-
-          if (trimmed.startsWith('data:')) {
-            const dataContent = trimmed.substring(5).trim();
-            if (dataContent === '[DONE]') {
-              break;
-            }
-
-            try {
-              const parsed = JSON.parse(dataContent);
-              if (parsed.token) {
-                fullText += parsed.token;
-                options.onToken?.(fullText);
-              }
-              if (parsed.fullResponse) {
-                finalResult = parsed.fullResponse;
-              }
-            } catch {
-              // Handle raw text chunk fallback
-              fullText += dataContent;
-              options.onToken?.(fullText);
-            }
-          }
-        }
-      }
-
-      if (finalResult) {
-        options.onComplete(finalResult);
-      } else {
-        options.onComplete({
-          message: fullText,
-          language: req.fanContext.language || 'en',
-          mapActions: [],
-          alertLevel: 'none',
-        });
-      }
-    } else {
-      const data = await response.json();
-      if (typeof data !== 'object' || data === null) {
-        throw new Error('Invalid JSON response format received');
-      }
-
-      const validated: AssistantResponse = {
-        message: typeof data.message === 'string' ? data.message : '',
-        language: typeof data.language === 'string' ? data.language : 'en',
-        mapActions: Array.isArray(data.mapActions) ? data.mapActions : [],
-        alertLevel: ['none', 'info', 'warn', 'critical'].includes(data.alertLevel)
-          ? data.alertLevel
-          : 'none',
-        meta: data.meta,
-      };
-
-      options.onComplete(validated);
+    const data = await response.json();
+    if (typeof data !== 'object' || data === null) {
+      throw new Error('Invalid JSON response format received');
     }
-  } catch (err: any) {
+
+    const validated: AssistantResponse = {
+      message: typeof data.message === 'string' ? data.message : '',
+      language: typeof data.language === 'string' ? data.language : 'en',
+      mapActions: Array.isArray(data.mapActions) ? data.mapActions : [],
+      alertLevel: ['none', 'info', 'warn', 'critical'].includes(data.alertLevel)
+        ? data.alertLevel
+        : 'none',
+      meta: data.meta,
+    };
+
+    options.onComplete(validated);
+  } catch (err) {
     clearTimeout(timeoutId);
     options.onError(err instanceof Error ? err : new Error(String(err)));
   }

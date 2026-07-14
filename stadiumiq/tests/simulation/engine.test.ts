@@ -3,13 +3,10 @@ import { Zone, SimState } from '../../lib/types';
 import {
   matchPhase,
   computeBaseDensity,
-  tickSimulation,
   decayRoutedLoad,
   mergeStatePatch,
   pruneAndCountSessions,
-  FULL_TIME_END_SEC,
   SESSION_TTL_MS,
-  DEFAULT_SIM_CONFIG,
 } from '../../lib/simulation/engine';
 
 describe('Simulation Engine - Pure Functions', () => {
@@ -50,46 +47,6 @@ describe('Simulation Engine - Pure Functions', () => {
       expect(gateDensity).toBeGreaterThanOrEqual(0);
       expect(gateDensity).toBeLessThanOrEqual(1);
     }
-  });
-
-  // Test tickSimulation purity
-  it('tickSimulation is pure, returns deep-equal outputs on repeated calls, and does not mutate inputs', () => {
-    const zones: Zone[] = [
-      { id: 'sec-101', label: '101', type: 'section', attrs: { accessible: true, enclosed: false, noise: 'high' } },
-      { id: 'gate-a', label: 'Gate A', type: 'gate', attrs: { accessible: true, enclosed: false, noise: 'high' } }
-    ];
-
-    const state: SimState = {
-      matchClockSec: 0,
-      density: { 'sec-101': 0.6, 'gate-a': 0.5 },
-      gateStatus: { 'gate-a': 'open' },
-      incidents: [],
-      routedLoad: { 'sec-101': 0.5 },
-      sensorCounts: { 'sec-101': 0 },
-      timeline: []
-    };
-
-    const config = {
-      tickIntervalMs: 2000,
-      simSecondsPerTick: 45,
-      seed: 20260710
-    };
-
-    // Capture density reference before
-    const densityRefBefore = state.density;
-
-    // Call once
-    const res1 = tickSimulation(state, zones, config);
-    // Call twice
-    const res2 = tickSimulation(state, zones, config);
-
-    // Deep equal outputs
-    expect(res1).toEqual(res2);
-
-    // No input mutation check
-    expect(state.density).toBe(densityRefBefore);
-    expect(state.density['sec-101']).toBe(0.6);
-    expect(state.matchClockSec).toBe(0);
   });
 
   // Test decayRoutedLoad
@@ -178,22 +135,6 @@ describe('Simulation Engine - Pure Functions', () => {
     // inputs not mutated
     expect(state.gateStatus['gate-a']).toBe('open');
     expect(state.timeline[0].atSec).toBe(-1800);
-  });
-
-  // matchClockSec is clamped at FULL_TIME_END_SEC and never exceeds it after repeated ticks.
-  it('tickSimulation clamps matchClockSec at FULL_TIME_END_SEC', () => {
-    const zones: Zone[] = [
-      { id: 'sec-101', label: '101', type: 'section', attrs: { accessible: true, enclosed: false, noise: 'high' } },
-    ];
-    let state: SimState = {
-      matchClockSec: FULL_TIME_END_SEC - 10,
-      density: {}, gateStatus: {}, incidents: [], routedLoad: {}, sensorCounts: {}, timeline: [],
-    };
-    for (let i = 0; i < 20; i++) {
-      state = tickSimulation(state, zones, DEFAULT_SIM_CONFIG);
-      expect(state.matchClockSec).toBeLessThanOrEqual(FULL_TIME_END_SEC);
-    }
-    expect(state.matchClockSec).toBe(FULL_TIME_END_SEC);
   });
 
   // pruneAndCountSessions drops entries older than SESSION_TTL_MS using an INJECTED nowMs

@@ -12,50 +12,39 @@ const VALID_GATE_IDS = new Set(ZONES.filter((z) => z.type === 'gate').map((z) =>
 const VALID_INCIDENT_TYPES = new Set(['crowd', 'medical', 'assistance', 'security', 'evacuation']);
 const VALID_INCIDENT_STATUSES = new Set(['pending', 'dispatched', 'resolved']);
 
+/** Maximum accepted upload payload size, in characters of JSON text. */
+export const UPLOAD_MAX_CHARS = 200000;
+
 /**
- * Validates the uploaded dataset payload against the MetLife Stadium graph rules,
- * enforcing value limits, property types, and zone/gate key validations.
+ * Validates an ALREADY-PARSED upload payload object against the MetLife
+ * Stadium graph rules (value ranges, property types, zone/gate key checks).
+ *
+ * Single source of truth for upload-dataset shape validation: both the
+ * UploadPanel (raw file text, via validateUploadDataset below) and the
+ * simStore's importDataset action (parsed objects, e.g. re-broadcast over the
+ * sim channel) delegate here, so the rules can never drift apart.
  */
-export function validateUploadDataset(rawText: string): ValidationResult {
+export function validateUploadDatasetObject(input: unknown): ValidationResult {
   const errors: string[] = [];
 
-  // 1. Strict Size Limit check
-  const maxBytes = 200000;
-  if (rawText.length > maxBytes) {
-    return {
-      valid: false,
-      errors: [`Payload size exceeds limit of ${maxBytes / 1000}KB.`],
-    };
-  }
-
-  // 2. JSON Parsing
-  let parsed: any;
-  try {
-    parsed = JSON.parse(rawText);
-  } catch (err: any) {
-    return {
-      valid: false,
-      errors: [`Invalid JSON syntax: ${err.message || 'parse failed'}`],
-    };
-  }
-
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
     return {
       valid: false,
       errors: ['Top-level payload must be a JSON object.'],
     };
   }
 
-  // 3. Unknown Top-level Keys check
+  const parsed = input as Record<string, unknown>;
+
+  // Unknown top-level keys check
   const allowedKeys = new Set(['density', 'gateStatus', 'incidents']);
-  const parsedKeys = Object.keys(parsed);
-  for (const key of parsedKeys) {
+  for (const key of Object.keys(parsed)) {
     if (!allowedKeys.has(key)) {
       errors.push(`Unknown top-level property "${key}" found.`);
     }
   }
 
-  // 4. Validate density
+  // Validate density
   if ('density' in parsed) {
     const densityVal = parsed.density;
     if (typeof densityVal !== 'object' || densityVal === null || Array.isArray(densityVal)) {
@@ -74,7 +63,7 @@ export function validateUploadDataset(rawText: string): ValidationResult {
     }
   }
 
-  // 5. Validate gateStatus
+  // Validate gateStatus
   if ('gateStatus' in parsed) {
     const gateStatusVal = parsed.gateStatus;
     if (typeof gateStatusVal !== 'object' || gateStatusVal === null || Array.isArray(gateStatusVal)) {
@@ -93,17 +82,18 @@ export function validateUploadDataset(rawText: string): ValidationResult {
     }
   }
 
-  // 6. Validate incidents
+  // Validate incidents
   if ('incidents' in parsed) {
     const incidentsVal = parsed.incidents;
     if (!Array.isArray(incidentsVal)) {
       errors.push("Property 'incidents' must be a JSON array.");
     } else {
-      incidentsVal.forEach((inc: any, index: number) => {
-        if (typeof inc !== 'object' || inc === null) {
+      incidentsVal.forEach((entry: unknown, index: number) => {
+        if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
           errors.push(`incidents[${index}]: must be a JSON object.`);
           return;
         }
+        const inc = entry as Record<string, unknown>;
 
         // Validate id
         if (typeof inc.id !== 'string' || !inc.id.trim()) {
@@ -111,12 +101,12 @@ export function validateUploadDataset(rawText: string): ValidationResult {
         }
 
         // Validate type
-        if (!VALID_INCIDENT_TYPES.has(inc.type)) {
+        if (typeof inc.type !== 'string' || !VALID_INCIDENT_TYPES.has(inc.type)) {
           errors.push(`incidents[${index}].type: must be one of crowd|medical|assistance|security|evacuation.`);
         }
 
         // Validate zoneId
-        if (!VALID_ZONE_IDS.has(inc.zoneId)) {
+        if (typeof inc.zoneId !== 'string' || !VALID_ZONE_IDS.has(inc.zoneId)) {
           errors.push(`incidents[${index}].zoneId: zone ID does not exist in venue metadata.`);
         }
 
@@ -126,7 +116,7 @@ export function validateUploadDataset(rawText: string): ValidationResult {
         }
 
         // Validate status
-        if (!VALID_INCIDENT_STATUSES.has(inc.status)) {
+        if (typeof inc.status !== 'string' || !VALID_INCIDENT_STATUSES.has(inc.status)) {
           errors.push(`incidents[${index}].status: must be one of pending|dispatched|resolved.`);
         }
 
@@ -149,10 +139,7 @@ export function validateUploadDataset(rawText: string): ValidationResult {
   }
 
   if (errors.length > 0) {
-    return {
-      valid: false,
-      errors,
-    };
+    return { valid: false, errors };
   }
 
   return {
@@ -160,4 +147,32 @@ export function validateUploadDataset(rawText: string): ValidationResult {
     errors: [],
     data: parsed as UploadDataset,
   };
+}
+
+/**
+ * Validates a raw upload payload string: size cap, JSON parse, then the
+ * shared object validation above.
+ */
+export function validateUploadDataset(rawText: string): ValidationResult {
+  // 1. Strict size limit check — before any parsing work
+  if (rawText.length > UPLOAD_MAX_CHARS) {
+    return {
+      valid: false,
+      errors: [`Payload size exceeds limit of ${UPLOAD_MAX_CHARS / 1000}KB.`],
+    };
+  }
+
+  // 2. JSON parsing
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch (err) {
+    return {
+      valid: false,
+      errors: [`Invalid JSON syntax: ${err instanceof Error ? err.message : 'parse failed'}`],
+    };
+  }
+
+  // 3. Shared object validation
+  return validateUploadDatasetObject(parsed);
 }

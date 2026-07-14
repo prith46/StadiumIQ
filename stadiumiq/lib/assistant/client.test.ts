@@ -107,57 +107,38 @@ describe('Assistant client API requester', () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
-  it('streaming EventSource: triggers onToken and onComplete', async () => {
-    // Mock ReadableStream reader for text/event-stream
-    const encoder = new TextEncoder();
-    const chunks = [
-      'data: {"token": "Hel"}\n',
-      'data: {"token": "lo "}\n',
-      'data: {"token": "World"}\n',
-      'data: {"fullResponse": {"message": "Hello World", "language": "en", "mapActions": [], "alertLevel": "none"}}\n',
-      'data: [DONE]\n',
-    ];
-
-    let chunkIdx = 0;
-    const mockReader = {
-      read: async () => {
-        if (chunkIdx >= chunks.length) {
-          return { done: true, value: undefined };
-        }
-        const val = encoder.encode(chunks[chunkIdx++]);
-        return { done: false, value: val };
-      },
-    };
-
-    const mockStream = {
-      getReader: () => mockReader,
-    };
-
+  it('transmits capped conversation history, excluding the message being sent', async () => {
     const fetchSpy = vi.fn().mockResolvedValue({
       ok: true,
-      headers: new Headers({ 'Content-Type': 'text/event-stream' }),
-      body: mockStream,
+      headers: new Headers({ 'Content-Type': 'application/json' }),
+      json: async () => ({
+        message: 'Hi again',
+        language: 'en',
+        mapActions: [],
+        alertLevel: 'none',
+      }),
     });
     vi.stubGlobal('fetch', fetchSpy);
 
-    const onToken = vi.fn();
-    const onComplete = vi.fn();
-    const onError = vi.fn();
+    const historyReq: AssistantRequest = {
+      ...reqPayload,
+      message: 'How far is that?',
+      history: [
+        { role: 'user', content: 'Where is the nearest restroom?' },
+        { role: 'assistant', content: 'The nearest restroom is near Gate B.' },
+        // Panel appends the in-flight message to its list before sending —
+        // must be dropped from the transmitted history.
+        { role: 'user', content: 'How far is that?' },
+      ],
+    };
 
-    await sendAssistantMessage(reqPayload, { onToken, onComplete, onError });
+    await sendAssistantMessage(historyReq, { onComplete: vi.fn(), onError: vi.fn() });
 
-    expect(onToken).toHaveBeenCalledTimes(3);
-    expect(onToken).toHaveBeenNthCalledWith(1, 'Hel');
-    expect(onToken).toHaveBeenNthCalledWith(2, 'Hello ');
-    expect(onToken).toHaveBeenNthCalledWith(3, 'Hello World');
-
-    expect(onComplete).toHaveBeenCalledWith({
-      message: 'Hello World',
-      language: 'en',
-      mapActions: [],
-      alertLevel: 'none',
-    });
-    expect(onError).not.toHaveBeenCalled();
+    const parsedBody = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    expect(parsedBody.history).toEqual([
+      { role: 'user', content: 'Where is the nearest restroom?' },
+      { role: 'assistant', content: 'The nearest restroom is near Gate B.' },
+    ]);
   });
 
   it('handles non-2xx failures and invokes onError', async () => {

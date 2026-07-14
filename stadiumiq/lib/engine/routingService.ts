@@ -78,7 +78,6 @@ export function computeServiceRoute(
     EDGES,
     ZONES,
     POIS,
-    density,
     poiStatus,
     gateStatus,
     routedLoad

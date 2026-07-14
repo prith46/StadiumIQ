@@ -244,7 +244,14 @@ describe('computeRoute — accessibility filter', () => {
     const filters: RouteFilters = { accessibleOnly: true };
 
     const result = computeRoute('A', 'D', accessEdges, accessZones, {}, {}, { D: 'open' }, filters);
-    expect(result).toEqual({ error: 'no_accessible_route_found' });
+    expect(result).toEqual({
+      error: 'no_accessible_route_found',
+      path: null,
+      etaSec: null,
+      reason: { crowdedZones: [], avoidedGates: [] },
+      accessible: false,
+      noRouteFound: true,
+    });
   });
 
   it('returns accessible path when one exists, even if a shorter inaccessible path also exists', () => {

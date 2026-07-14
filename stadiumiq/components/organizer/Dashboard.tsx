@@ -4,6 +4,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useSimStore } from '@/lib/store/simStore';
 import { StadiumMap } from '@/components/StadiumMap';
 import type { StadiumMapHandle } from '@/lib/assistant/mapActionDispatcher';
+import type { Incident } from '@/lib/types';
 import { AlertStack } from '@/components/alerts/AlertStack';
 import { CascadeAlertSummary } from '@/components/CascadeAlertSummary';
 import { predictCascades } from '@/lib/engine/cascadePrediction';
@@ -16,7 +17,6 @@ import { DebriefReport } from './DebriefReport';
 import { MapSettingsSimPanel } from './MapSettingsSimPanel';
 import {
   ShieldAlert,
-  AlertTriangle,
   Users,
   Settings,
   Cpu,
@@ -26,6 +26,15 @@ import {
   UploadCloud,
   Sliders
 } from 'lucide-react';
+
+// Hoisted so the array identity is stable across renders — an inline literal
+// here would defeat AlertStack's React.memo on every 1s clock tick.
+const OPS_FEED_ALERT_KINDS: ('ops' | 'safety' | 'proactive' | 'incentive')[] = [
+  'ops',
+  'safety',
+  'proactive',
+  'incentive',
+];
 
 export function Dashboard() {
   const mapRef = useRef<StadiumMapHandle | null>(null);
@@ -42,15 +51,20 @@ export function Dashboard() {
   const triggerSos = useSimStore((s) => s.triggerSos);
   const clearSos = useSimStore((s) => s.clearSos);
 
-  // M23: cascade prediction recomputed from the existing forecast timeline —
-  // no new caching layer, just memoized on the inputs that actually change it.
-  // Suppress and clear cascades during active SOS/emergency state.
+  // M23: the EXPENSIVE cascade prediction is keyed ONLY on the timeline (the
+  // sole input that changes its output) — previously it shared a memo with
+  // the per-tick filter below, whose deps (matchClockSec/density/gateStatus)
+  // change every 1s sequencer tick, so the full prediction re-ran 60×/min.
+  const predictedCascades = useMemo(() => {
+    return predictCascades(timeline, EDGES);
+  }, [timeline]);
+
+  // CHEAP per-tick display filtering + SOS suppression over the memoized
+  // prediction. Auto-expiry: drop cascades where the match clock is past the
+  // root crossing and all zones in the chain are below the 0.75 threshold.
   const cascades = useMemo(() => {
     if (sos?.active) return [];
-    const predicted = predictCascades(timeline, EDGES);
-    // Auto-expiry: filter out cascades where the match clock is past the root crossing
-    // and all zones in the chain have dropped below the 0.75 hotspot threshold.
-    return predicted.filter((cascade) => {
+    return predictedCascades.filter((cascade) => {
       const hasBegun = matchClockSec >= cascade.chain[0].predictedCrossingSec;
       if (hasBegun) {
         const allBelow = cascade.chain.every((link) => {
@@ -63,10 +77,10 @@ export function Dashboard() {
       }
       return true;
     });
-  }, [timeline, sos?.active, matchClockSec, gateStatus, density]);
+  }, [predictedCascades, sos?.active, matchClockSec, gateStatus, density]);
 
   // Local state for selecting an incident on the map
-  const [selectedIncident, setSelectedIncident] = useState<any | null>(null);
+  const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
   const [confirmOrganizerSos, setConfirmOrganizerSos] = useState(false);
   const organizerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -117,8 +131,10 @@ export function Dashboard() {
     };
   }, []);
 
-  // Handle clicking a zone on the map: if it contains an active incident, show detail
-  const handleZoneClick = (zoneId: string) => {
+  // Handle clicking a zone on the map: if it contains an active incident, show
+  // detail. useCallback keyed on `incidents` (changes rarely) so the memoized
+  // StadiumMap isn't re-rendered by every 1s Dashboard clock tick.
+  const handleZoneClick = React.useCallback((zoneId: string) => {
     const matchedInc = incidents.find(
       (inc) => inc.zoneId === zoneId && inc.status !== 'resolved'
     );
@@ -136,7 +152,7 @@ export function Dashboard() {
         }
       });
     }
-  };
+  }, [incidents]);
 
   // Format time (s) -> mm:ss. Always non-negative: matchClockSec runs from
   // MATCH_START_SEC (-1800, pre-match) through kickoff (0) onward, and
@@ -333,7 +349,7 @@ export function Dashboard() {
               </div>
               <div className="text-xs text-red-900 mt-2 border-t border-red-200 pt-2">
                 <span className="font-bold block uppercase tracking-wider text-[9px] opacity-70">Reporter Notes</span>
-                <p className="italic text-red-950 mt-0.5 font-medium">"{selectedIncident.note}"</p>
+                <p className="italic text-red-950 mt-0.5 font-medium">&ldquo;{selectedIncident.note}&rdquo;</p>
               </div>
             </div>
           ) : (
@@ -366,7 +382,7 @@ export function Dashboard() {
                 <CascadeAlertSummary cascades={cascades} currentSec={matchClockSec} />
                 <AlertStack
                   inline={true}
-                  filterKinds={['ops', 'safety', 'proactive', 'incentive']}
+                  filterKinds={OPS_FEED_ALERT_KINDS}
                   mapRef={mapRef}
                 />
               </div>

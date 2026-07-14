@@ -97,7 +97,8 @@ describe('Map action dispatcher', () => {
     const actions: MapAction[] = [{ op: 'highlight', zoneId: 'sec-214' }];
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    await expect(dispatchMapActions(actions, null)).resolves.not.toThrow();
+    // Resolves cleanly to undefined (void) and logs a warning instead of throwing.
+    await expect(dispatchMapActions(actions, null)).resolves.toBeUndefined();
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
   });

@@ -63,9 +63,13 @@ export function TicketScanCard({ onScanComplete, onSkip }: TicketScanCardProps) 
       setMockIndex((prev) => prev + 1);
 
       onScanComplete(ticket);
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
-      setErrorMsg(err.message || "Failed to scan ticket. Please use the language picker or skip.");
+      setErrorMsg(
+        err instanceof Error && err.message
+          ? err.message
+          : "Failed to scan ticket. Please use the language picker or skip."
+      );
     } finally {
       setScanning(false);
     }

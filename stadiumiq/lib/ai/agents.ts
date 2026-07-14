@@ -1,18 +1,14 @@
 import { z } from 'zod';
-import { FanContext, Zone, SimState } from '../types';
+import { FanContext, AssistantResponse } from '../types';
 import { createClient, ChatMessage } from './client';
 import { executeTool, getToolSchemas, ToolContext, ToolSchema } from './tools';
 import { detectStressHeuristic } from './stressDetection';
-import { FAN_SYSTEM_PROMPT, COPILOT_SYSTEM_PROMPT } from './prompts';
+import { FAN_SYSTEM_PROMPT } from './prompts';
 import { sanitizeUserInput } from './sanitize';
 
-export interface AssistantResponse {
-  message: string;
-  language: string;
-  mapActions: Array<{ op: 'highlight' | 'route' | 'pin'; zoneId?: string; path?: string[] }>;
-  alertLevel: 'none' | 'info' | 'warn' | 'critical';
-  meta?: { tool?: string; stress?: boolean };
-}
+export type { AssistantResponse } from '../types';
+
+export type AssistantHistoryTurn = { role: 'user' | 'assistant'; content: string };
 
 export const FALLBACK_RESPONSE: AssistantResponse = {
   message: "I'm having trouble connecting right now. Please try again in a moment, or ask a steward nearby.",
@@ -49,14 +45,16 @@ function extractMapActions(value: unknown): AssistantResponse['mapActions'] {
   if (!Array.isArray(value)) return [];
   const actions: AssistantResponse['mapActions'] = [];
   for (const item of value) {
-    if (item && typeof item === 'object' && VALID_MAP_OPS.has((item as any).op)) {
-      const op = (item as any).op as 'highlight' | 'route' | 'pin';
-      const zoneId = typeof (item as any).zoneId === 'string' ? (item as any).zoneId : undefined;
-      const path = Array.isArray((item as any).path) && (item as any).path.every((p: unknown) => typeof p === 'string')
-        ? (item as any).path
+    if (!item || typeof item !== 'object') continue;
+    const candidate = item as { op?: unknown; zoneId?: unknown; path?: unknown };
+    if (typeof candidate.op !== 'string' || !VALID_MAP_OPS.has(candidate.op)) continue;
+    const op = candidate.op as 'highlight' | 'route' | 'pin';
+    const zoneId = typeof candidate.zoneId === 'string' ? candidate.zoneId : undefined;
+    const path =
+      Array.isArray(candidate.path) && candidate.path.every((p): p is string => typeof p === 'string')
+        ? candidate.path
         : undefined;
-      actions.push({ op, zoneId, path });
-    }
+    actions.push({ op, zoneId, path });
   }
   return actions;
 }
@@ -183,6 +181,25 @@ function parseResponse(text: string, userMessage: string, fallbackLanguage: stri
   return response;
 }
 
+/**
+ * If the reportIncident tool ran during the planning loop, attach the incident
+ * it created to meta.reportedIncident so the browser can apply it to the live
+ * simStore (the server process has no access to the client's store).
+ */
+function attachReportedIncident(parsed: AssistantResponse, conversation: ChatMessage[]): AssistantResponse {
+  for (let i = conversation.length - 1; i >= 0; i--) {
+    const msg = conversation[i];
+    if (msg.role !== 'tool' || typeof msg.content !== 'string') continue;
+    try {
+      const res = JSON.parse(msg.content);
+      if (res && res.success === true && res.incident && typeof res.incident.id === 'string') {
+        return { ...parsed, meta: { ...parsed.meta, reportedIncident: res.incident } };
+      }
+    } catch {}
+  }
+  return parsed;
+}
+
 function injectMissingPaths(parsed: AssistantResponse, conversation: ChatMessage[]): AssistantResponse {
   if (!parsed.mapActions) {
     parsed.mapActions = [];
@@ -253,7 +270,7 @@ async function runPlanningLoop(
 
       if (!result.toolCalls || result.toolCalls.length === 0) {
         const parsed = parseResponse(result.text || '', userMessage, fallbackLanguage);
-        return injectMissingPaths(parsed, conversation);
+        return attachReportedIncident(injectMissingPaths(parsed, conversation), conversation);
       }
 
       // Record the tool calls
@@ -264,11 +281,13 @@ async function runPlanningLoop(
 
       // Execute each tool call
       for (const call of result.toolCalls) {
-        let executionResult: any;
+        let executionResult: unknown;
         try {
           executionResult = await executeTool(call.name, call.args, ctx);
-        } catch (err: any) {
-          executionResult = { error: err.message || 'Tool execution failed' };
+        } catch (err) {
+          executionResult = {
+            error: err instanceof Error && err.message ? err.message : 'Tool execution failed',
+          };
         }
         conversation.push({
           role: 'tool',
@@ -283,7 +302,7 @@ async function runPlanningLoop(
     // Force final answer on 3rd turn by presenting no tools
     const finalResult = await client.chat(conversation, []);
     const parsed = parseResponse(finalResult.text || '', userMessage, fallbackLanguage);
-    return injectMissingPaths(parsed, conversation);
+    return attachReportedIncident(injectMissingPaths(parsed, conversation), conversation);
   } catch (err) {
     console.error('Error in agent planning loop:', err);
     return {
@@ -296,47 +315,46 @@ async function runPlanningLoop(
 export async function runFanAssistant(
   userMessage: string,
   fanContext: FanContext,
-  ctx: ToolContext
+  ctx: ToolContext,
+  history: AssistantHistoryTurn[] = []
 ): Promise<AssistantResponse> {
   const sanitized = sanitizeUserInput(userMessage);
+
+  // These fan-context fields are client-supplied strings that land in a
+  // SYSTEM-role message, so they get the same treatment as chat text:
+  // prompt-delimiter sanitization plus a hard length cap. The API route
+  // already caps them via fanContextSchema — repeated here because this
+  // function is also reachable without going through the route.
+  const cleanField = (value: string | undefined, fallback: string, maxLen: number): string => {
+    if (!value) return fallback;
+    return sanitizeUserInput(value).slice(0, maxLen);
+  };
+
   const contextSummary = `User Context:
-- Language: ${fanContext.language}
-- Current Location: ${fanContext.location || 'none'}
+- Language: ${cleanField(fanContext.language, 'en', 35)}
+- Current Location: ${cleanField(fanContext.location, 'none', 120)}
 - Accessibility Needed: ${fanContext.accessibility}
 - Group Type: ${fanContext.group || 'solo'}
 - Leaving Early: ${fanContext.leavingEarly || false}
-- Ticket Section: ${fanContext.ticket?.section || 'none'}
-- Ticket Gate: ${fanContext.ticket?.gate || 'none'}
-- Nationality: ${fanContext.ticket?.nationality || 'unknown'}`;
+- Ticket Section: ${cleanField(fanContext.ticket?.section, 'none', 40)}
+- Ticket Gate: ${cleanField(fanContext.ticket?.gate, 'none', 40)}
+- Nationality: ${cleanField(fanContext.ticket?.nationality, 'unknown', 80)}`;
+
+  // Prior conversation turns give the model context for follow-up questions
+  // ("how far is that?"). User turns are untrusted like the live message:
+  // sanitized and wrapped in the same <user_message> delimiters.
+  const historyMessages: ChatMessage[] = history.map((turn) =>
+    turn.role === 'user'
+      ? { role: 'user' as const, content: `<user_message>${sanitizeUserInput(turn.content)}</user_message>` }
+      : { role: 'assistant' as const, content: turn.content }
+  );
 
   const messages: ChatMessage[] = [
     { role: 'system', content: FAN_SYSTEM_PROMPT },
     { role: 'system', content: contextSummary },
+    ...historyMessages,
     { role: 'user', content: `<user_message>${sanitized}</user_message>` }
   ];
 
   return runPlanningLoop(messages, getToolSchemas(), ctx, userMessage, fanContext.language || 'en');
-}
-
-/**
- * @deprecated No external callers — see audit item 2.1. The organizer copilot path
- * has been superseded by getCopilotBrief() in copilot.ts (M6 documented path).
- * Remove once confirmed safe across all deployment targets.
- */
-export async function runOrganizerCopilot(
-  query: string,
-  ctx: ToolContext
-): Promise<AssistantResponse> {
-  const sanitized = sanitizeUserInput(query);
-  const messages: ChatMessage[] = [
-    { role: 'system', content: COPILOT_SYSTEM_PROMPT },
-    { role: 'user', content: `<user_message>${sanitized}</user_message>` }
-  ];
-
-  // Restrict copilot to specific tools
-  const copilotTools = getToolSchemas().filter(t =>
-    ['getForecast', 'getPolicy', 'computeRoute'].includes(t.name)
-  );
-
-  return runPlanningLoop(messages, copilotTools, ctx, query, ctx.fanContext?.language || 'en');
 }

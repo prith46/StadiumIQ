@@ -1,5 +1,5 @@
 import { vi, describe, it, expect, beforeEach } from 'vitest';
-import { runFanAssistant, runOrganizerCopilot, FALLBACK_RESPONSE } from '../../lib/ai/agents';
+import { runFanAssistant, FALLBACK_RESPONSE } from '../../lib/ai/agents';
 import { Zone, SimState, FanContext } from '../../lib/types';
 
 const mockChat = vi.fn();
@@ -180,27 +180,4 @@ describe('AI Agentic Planners', () => {
     expect(mockChat).toHaveBeenCalledTimes(3); // 2 tool rounds + 1 forced text round
   });
 
-  // 5. Organizer copilot is restricted to getForecast/getPolicy/computeRoute only
-  it('runOrganizerCopilot exposes only the organizer tool scope (no fan-only tools)', async () => {
-    mockChat.mockResolvedValueOnce({
-      text: JSON.stringify({
-        message: 'Ops summary.',
-        language: 'en',
-        mapActions: [],
-        alertLevel: 'none',
-      }),
-      toolCalls: [],
-    });
-
-    await runOrganizerCopilot('status of north gate', ctx);
-
-    // Second positional arg of client.chat is the tool schema array actually offered.
-    const toolsOffered = mockChat.mock.calls[0][1] as Array<{ name: string }>;
-    const names = toolsOffered.map((t) => t.name).sort();
-    expect(names).toEqual(['computeRoute', 'getForecast', 'getPolicy']);
-    // fan-only tools must NOT be exposed to the organizer copilot
-    expect(names).not.toContain('detectStress');
-    expect(names).not.toContain('findAmenity');
-    expect(names).not.toContain('getIncentive');
-  });
 });

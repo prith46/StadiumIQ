@@ -72,6 +72,17 @@ async function extractProviderError(res: Response): Promise<string> {
   }
 }
 
+/**
+ * Human-readable failure cause from an unknown thrown value — maps the
+ * AbortController's AbortError to "timeout" so logs say what actually happened.
+ */
+function describeError(err: unknown): string {
+  if (err instanceof Error) {
+    return err.name === 'AbortError' ? 'timeout' : err.message || 'request failed';
+  }
+  return 'request failed';
+}
+
 async function fetchWithRetry(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
   let attempts = 0;
   while (true) {
@@ -98,10 +109,12 @@ async function fetchWithRetry(url: string, options: RequestInit, timeoutMs: numb
       }
 
       return res;
-    } catch (err: any) {
+    } catch (err) {
       clearTimeout(id);
-      const isTimeout = err.name === 'AbortError';
-      if (attempts < 2 && (isTimeout || err.message?.includes('fetch') || err.message?.includes('HTTP'))) {
+      const isTimeout = err instanceof Error && err.name === 'AbortError';
+      const isRetryable =
+        err instanceof Error && (err.message.includes('fetch') || err.message.includes('HTTP'));
+      if (attempts < 2 && (isTimeout || isRetryable)) {
         continue; // retry once
       }
       throw err;
@@ -109,14 +122,101 @@ async function fetchWithRetry(url: string, options: RequestInit, timeoutMs: numb
   }
 }
 
-function formatSchemaTypesForGemini(schema: any): any {
+/**
+ * JSON-schema node as carried in tool definitions and response schemas.
+ * Structural, not exhaustive: only the fields this adapter needs to walk are
+ * typed; everything else passes through untouched via the index signature.
+ */
+interface JsonSchemaNode {
+  type?: unknown;
+  properties?: Record<string, JsonSchemaNode>;
+  items?: JsonSchemaNode;
+  [key: string]: unknown;
+}
+
+// --- Gemini wire types (request) ---
+
+interface GeminiFunctionCallPart {
+  functionCall: { name: string; args: Record<string, unknown> };
+  thoughtSignature?: string;
+}
+
+type GeminiPart =
+  | { text: string }
+  | { inlineData: { mimeType: string; data: string } }
+  | GeminiFunctionCallPart
+  | { functionResponse: { name: string; response: { result: unknown } } };
+
+interface GeminiContent {
+  role: 'user' | 'model' | 'function';
+  parts: GeminiPart[];
+}
+
+interface GeminiRequestBody {
+  contents: GeminiContent[];
+  systemInstruction?: { parts: Array<{ text: string }> };
+  tools?: Array<{
+    functionDeclarations: Array<{ name: string; description: string; parameters: JsonSchemaNode }>;
+  }>;
+  generationConfig?: { responseMimeType: string; responseSchema: JsonSchemaNode };
+}
+
+// --- Gemini wire types (response) ---
+
+interface GeminiResponsePart {
+  text?: string;
+  functionCall?: { name: string; args?: Record<string, unknown> };
+  thoughtSignature?: string;
+}
+
+interface GeminiResponse {
+  error?: { message?: string };
+  candidates?: Array<{ content?: { parts?: GeminiResponsePart[] } }>;
+}
+
+// --- Groq (OpenAI-compatible) wire types ---
+
+interface GroqToolCall {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+}
+
+interface GroqMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string | null;
+  tool_call_id?: string;
+  tool_calls?: GroqToolCall[];
+}
+
+interface GroqRequestBody {
+  model: string;
+  messages: GroqMessage[];
+  tools?: Array<{
+    type: 'function';
+    function: { name: string; description: string; parameters: Record<string, unknown> };
+  }>;
+  response_format?: { type: 'json_object' };
+}
+
+interface GroqResponse {
+  error?: { message?: string };
+  choices?: Array<{
+    message?: {
+      content?: string | null;
+      tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
+    };
+  }>;
+}
+
+function formatSchemaTypesForGemini(schema: JsonSchemaNode): JsonSchemaNode {
   if (!schema || typeof schema !== 'object') return schema;
-  const formatted = { ...schema };
+  const formatted: JsonSchemaNode = { ...schema };
   if (typeof formatted.type === 'string') {
     formatted.type = formatted.type.toUpperCase();
   }
-  if (formatted.properties) {
-    const props: any = {};
+  if (formatted.properties && typeof formatted.properties === 'object') {
+    const props: Record<string, JsonSchemaNode> = {};
     for (const [k, v] of Object.entries(formatted.properties)) {
       props[k] = formatSchemaTypesForGemini(v);
     }
@@ -128,19 +228,72 @@ function formatSchemaTypesForGemini(schema: any): any {
   return formatted;
 }
 
+/**
+ * The structured-output contract ({ message, language, mapActions[], alertLevel })
+ * as a Gemini responseSchema. Built and Gemini-formatted ONCE at module load and
+ * shared by both chat() and visionChat() — previously this literal was duplicated
+ * verbatim across both methods and re-walked by formatSchemaTypesForGemini on
+ * every request.
+ */
+const GEMINI_RESPONSE_SCHEMA: JsonSchemaNode = formatSchemaTypesForGemini({
+  type: 'object',
+  properties: {
+    message: { type: 'string' },
+    language: { type: 'string' },
+    mapActions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          op: { type: 'string', enum: ['highlight', 'route', 'pin'] },
+          zoneId: { type: 'string' },
+          path: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['op'],
+      },
+    },
+    alertLevel: { type: 'string', enum: ['none', 'info', 'warn', 'critical'] },
+  },
+  required: ['message', 'language', 'mapActions', 'alertLevel'],
+});
+
+/**
+ * Parses an assistant-turn history entry that encodes prior tool calls as a
+ * JSON array (see runPlanningLoop, which stores them via JSON.stringify).
+ * Returns [] when the content is plain assistant text rather than tool calls.
+ */
+function parseHistoryToolCalls(content: string): ToolCall[] {
+  if (!content.startsWith('[') || !content.endsWith(']')) return [];
+  try {
+    const parsed: unknown = JSON.parse(content);
+    if (Array.isArray(parsed) && parsed.length > 0 && typeof (parsed[0] as ToolCall)?.name === 'string') {
+      return parsed as ToolCall[];
+    }
+  } catch {
+    // Not a tool-call array — treat as plain text.
+  }
+  return [];
+}
+
 class GeminiClient implements AiClient {
   supportsVision = true;
 
   async chat(messages: ChatMessage[], tools: ToolSchema[]): Promise<ChatResult> {
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${AI_ENV.LLM_MODEL}:generateContent?key=${AI_ENV.LLM_API_KEY}`;
-      
+      // Key travels in a header, not the URL — query strings end up in
+      // proxy/server logs.
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${AI_ENV.LLM_MODEL}:generateContent`;
+
       let systemInstructionText = '';
-      const contents: any[] = [];
+      const contents: GeminiContent[] = [];
 
       for (const msg of messages) {
         if (msg.role === 'system') {
-          systemInstructionText = msg.content;
+          // Concatenate: callers send multiple system messages (base prompt +
+          // context summary) and overwriting would drop the primary prompt.
+          systemInstructionText = systemInstructionText
+            ? `${systemInstructionText}\n\n${msg.content}`
+            : msg.content;
           continue;
         }
 
@@ -150,18 +303,13 @@ class GeminiClient implements AiClient {
             parts: [{ text: msg.content }]
           });
         } else if (msg.role === 'assistant') {
-          let toolCalls: any[] = [];
-          try {
-            if (msg.content.startsWith('[') && msg.content.endsWith(']')) {
-              toolCalls = JSON.parse(msg.content);
-            }
-          } catch (_) {}
+          const toolCalls = parseHistoryToolCalls(msg.content);
 
-          if (Array.isArray(toolCalls) && toolCalls.length > 0 && toolCalls[0]?.name) {
+          if (toolCalls.length > 0) {
             contents.push({
               role: 'model',
-              parts: toolCalls.map(tc => {
-                const part: any = {
+              parts: toolCalls.map((tc): GeminiPart => {
+                const part: GeminiFunctionCallPart = {
                   functionCall: {
                     name: tc.name,
                     args: tc.args
@@ -182,10 +330,10 @@ class GeminiClient implements AiClient {
             });
           }
         } else if (msg.role === 'tool') {
-          let resultObj = {};
+          let resultObj: unknown;
           try {
             resultObj = JSON.parse(msg.content);
-          } catch (_) {
+          } catch {
             resultObj = { value: msg.content };
           }
           contents.push({
@@ -200,7 +348,7 @@ class GeminiClient implements AiClient {
         }
       }
 
-      const body: any = { contents };
+      const body: GeminiRequestBody = { contents };
 
       if (systemInstructionText) {
         body.systemInstruction = {
@@ -213,7 +361,7 @@ class GeminiClient implements AiClient {
           functionDeclarations: tools.map(t => ({
             name: t.name,
             description: t.description,
-            parameters: formatSchemaTypesForGemini(t.parameters)
+            parameters: formatSchemaTypesForGemini(t.parameters as JsonSchemaNode)
           }))
         }];
       }
@@ -222,33 +370,13 @@ class GeminiClient implements AiClient {
       if (tools.length === 0) {
         body.generationConfig = {
           responseMimeType: 'application/json',
-          responseSchema: formatSchemaTypesForGemini({
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-              language: { type: 'string' },
-              mapActions: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  properties: {
-                    op: { type: 'string', enum: ['highlight', 'route', 'pin'] },
-                    zoneId: { type: 'string' },
-                    path: { type: 'array', items: { type: 'string' } }
-                  },
-                  required: ['op']
-                }
-              },
-              alertLevel: { type: 'string', enum: ['none', 'info', 'warn', 'critical'] }
-            },
-            required: ['message', 'language', 'mapActions', 'alertLevel']
-          })
+          responseSchema: GEMINI_RESPONSE_SCHEMA,
         };
       }
 
       const res = await fetchWithRetry(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': AI_ENV.LLM_API_KEY },
         body: JSON.stringify(body),
       }, AI_ENV.LLM_TIMEOUT_MS);
 
@@ -256,14 +384,14 @@ class GeminiClient implements AiClient {
         throw new Error(`Gemini API ${res.status}: ${await extractProviderError(res)}`);
       }
 
-      const data = await res.json();
+      const data = (await res.json()) as GeminiResponse;
       if (data.error) {
         throw new Error(data.error.message || 'Gemini response error');
       }
 
       const candidate = data.candidates?.[0];
       const parts = candidate?.content?.parts || [];
-      
+
       let text: string | null = null;
       const toolCalls: ToolCall[] = [];
 
@@ -285,8 +413,8 @@ class GeminiClient implements AiClient {
       }
 
       return { text, toolCalls };
-    } catch (err: any) {
-      const detail = err?.name === 'AbortError' ? 'timeout' : (err?.message || 'request failed');
+    } catch (err) {
+      const detail = describeError(err);
       // Log the real underlying cause (e.g. "Gemini API 400: API key not valid")
       // rather than only the generic wrapper, so failures are diagnosable from logs.
       console.error('[GeminiClient.chat] request failed:', detail);
@@ -296,14 +424,16 @@ class GeminiClient implements AiClient {
 
   async visionChat(messages: ChatMessage[], imageBase64: string, mimeType: string): Promise<ChatResult> {
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${AI_ENV.LLM_MODEL}:generateContent?key=${AI_ENV.LLM_API_KEY}`;
-      
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${AI_ENV.LLM_MODEL}:generateContent`;
+
       let systemInstructionText = '';
-      const contents: any[] = [];
+      const contents: GeminiContent[] = [];
 
       for (const msg of messages) {
         if (msg.role === 'system') {
-          systemInstructionText = msg.content;
+          systemInstructionText = systemInstructionText
+            ? `${systemInstructionText}\n\n${msg.content}`
+            : msg.content;
           continue;
         }
 
@@ -324,31 +454,11 @@ class GeminiClient implements AiClient {
         });
       }
 
-      const body: any = {
+      const body: GeminiRequestBody = {
         contents,
         generationConfig: {
           responseMimeType: 'application/json',
-          responseSchema: formatSchemaTypesForGemini({
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-              language: { type: 'string' },
-              mapActions: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  properties: {
-                    op: { type: 'string', enum: ['highlight', 'route', 'pin'] },
-                    zoneId: { type: 'string' },
-                    path: { type: 'array', items: { type: 'string' } }
-                  },
-                  required: ['op']
-                }
-              },
-              alertLevel: { type: 'string', enum: ['none', 'info', 'warn', 'critical'] }
-            },
-            required: ['message', 'language', 'mapActions', 'alertLevel']
-          })
+          responseSchema: GEMINI_RESPONSE_SCHEMA,
         }
       };
 
@@ -360,7 +470,7 @@ class GeminiClient implements AiClient {
 
       const res = await fetchWithRetry(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': AI_ENV.LLM_API_KEY },
         body: JSON.stringify(body),
       }, AI_ENV.LLM_TIMEOUT_MS);
 
@@ -368,15 +478,15 @@ class GeminiClient implements AiClient {
         throw new Error(`Gemini API ${res.status}: ${await extractProviderError(res)}`);
       }
 
-      const data = await res.json();
+      const data = (await res.json()) as GeminiResponse;
       if (data.error) {
         throw new Error(data.error.message || 'Gemini vision error');
       }
 
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text || null;
       return { text, toolCalls: [] };
-    } catch (err: any) {
-      const detail = err?.name === 'AbortError' ? 'timeout' : (err?.message || 'request failed');
+    } catch (err) {
+      const detail = describeError(err);
       console.error('[GeminiClient.visionChat] request failed:', detail);
       throw new AiClientError('Gemini vision communication failure: ' + detail);
     }
@@ -389,8 +499,8 @@ class GroqClient implements AiClient {
   async chat(messages: ChatMessage[], tools: ToolSchema[]): Promise<ChatResult> {
     try {
       const url = 'https://api.groq.com/openai/v1/chat/completions';
-      
-      const groqMessages = messages.map(msg => {
+
+      const groqMessages = messages.map((msg): GroqMessage => {
         if (msg.role === 'system') {
           return { role: 'system', content: msg.content };
         }
@@ -398,20 +508,15 @@ class GroqClient implements AiClient {
           return { role: 'user', content: msg.content };
         }
         if (msg.role === 'assistant') {
-          let toolCalls: any[] = [];
-          try {
-            if (msg.content.startsWith('[') && msg.content.endsWith(']')) {
-              toolCalls = JSON.parse(msg.content);
-            }
-          } catch (_) {}
+          const toolCalls = parseHistoryToolCalls(msg.content);
 
-          if (Array.isArray(toolCalls) && toolCalls.length > 0 && toolCalls[0]?.name) {
+          if (toolCalls.length > 0) {
             return {
               role: 'assistant',
               content: null,
-              tool_calls: toolCalls.map(tc => ({
+              tool_calls: toolCalls.map((tc) => ({
                 id: tc.id,
-                type: 'function',
+                type: 'function' as const,
                 function: {
                   name: tc.name,
                   arguments: JSON.stringify(tc.args)
@@ -429,7 +534,7 @@ class GroqClient implements AiClient {
         };
       });
 
-      const body: any = {
+      const body: GroqRequestBody = {
         model: AI_ENV.LLM_MODEL,
         messages: groqMessages,
       };
@@ -460,7 +565,7 @@ class GroqClient implements AiClient {
         throw new Error(`Groq API ${res.status}: ${await extractProviderError(res)}`);
       }
 
-      const data = await res.json();
+      const data = (await res.json()) as GroqResponse;
       if (data.error) {
         throw new Error(data.error.message || 'Groq response error');
       }
@@ -468,14 +573,16 @@ class GroqClient implements AiClient {
       const choice = data.choices?.[0];
       const message = choice?.message;
       const text = message?.content || null;
-      
+
       const toolCalls: ToolCall[] = [];
       if (message?.tool_calls) {
         for (const tc of message.tool_calls) {
-          let args = {};
+          let args: Record<string, unknown> = {};
           try {
             args = JSON.parse(tc.function.arguments);
-          } catch (_) {}
+          } catch {
+            // Malformed arguments payload — fall back to no args.
+          }
           toolCalls.push({
             name: tc.function.name,
             args,
@@ -485,8 +592,8 @@ class GroqClient implements AiClient {
       }
 
       return { text, toolCalls };
-    } catch (err: any) {
-      const detail = err?.name === 'AbortError' ? 'timeout' : (err?.message || 'request failed');
+    } catch (err) {
+      const detail = describeError(err);
       console.error('[GroqClient.chat] request failed:', detail);
       throw new AiClientError('Groq communication failure: ' + detail);
     }

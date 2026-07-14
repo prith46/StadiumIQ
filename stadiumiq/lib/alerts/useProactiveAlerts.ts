@@ -24,7 +24,11 @@ import type { Alert } from '../types';
  * location set at all, and incident visibility shouldn't depend on it.
  */
 export function useProactiveAlerts() {
-  const matchClockSec = useSimStore((s) => s.matchClockSec);
+  // Subscribe to a 10-sim-second BUCKET of the clock, not the raw clock: the
+  // triage below is throttled to once per 10 sim-seconds anyway, so a raw
+  // matchClockSec subscription only forced a pointless re-render of every
+  // consumer (AlertStack in both views) on each 1s sequencer tick.
+  const triageBucket = useSimStore((s) => Math.floor(s.matchClockSec / 10));
   const location = useSimStore((s) => s.fanContext.location);
   const leavingEarly = useSimStore((s) => s.fanContext.leavingEarly);
   const incidents = useSimStore((s) => s.incidents);
@@ -35,9 +39,11 @@ export function useProactiveAlerts() {
 
   const lastCheckedClockRef = useRef<number | null>(null);
 
-  // Run the alerts triage on every clock tick change or fan context changes (throttled to 10s simulation time)
+  // Run the alerts triage on every bucket change or fan context changes (throttled to 10s simulation time)
   useEffect(() => {
     if (!location) return;
+
+    const matchClockSec = useSimStore.getState().matchClockSec;
 
     // Throttle evaluation to once every 10 simulation seconds
     if (lastCheckedClockRef.current !== null) {
@@ -53,7 +59,7 @@ export function useProactiveAlerts() {
     for (const item of evaluatedExisting) {
       fireAlert(item.triggerKey, item.alert, matchClockSec);
     }
-  }, [matchClockSec, location, leavingEarly, fireAlert]);
+  }, [triageBucket, location, leavingEarly, fireAlert]);
 
   const incidentAlerts = useMemo<Alert[]>(() => {
     return incidents

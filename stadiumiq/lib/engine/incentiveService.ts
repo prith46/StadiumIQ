@@ -30,7 +30,12 @@ export function runIncentiveTriageService(): void {
 
   // Reroutes offered to the fan must respect their persistent sensory
   // preferences, same mapping/precedence as the F4 tool adapter and alertService.
-  const sensoryFilters = sensoryToRouteFilters(fanContext.sensory);
+  // accessibleOnly is the M11 hard filter: never offer a stairs route to an
+  // accessibility-flagged fan.
+  const sensoryFilters = {
+    ...sensoryToRouteFilters(fanContext.sensory),
+    accessibleOnly: fanContext.accessibility || undefined,
+  };
 
   // 1. Run bottleneck detection triage (stadium-wide candidate list)
   const triageInput: IncentiveTriageInput = {
@@ -64,6 +69,15 @@ export function runIncentiveTriageService(): void {
     (p) => (p.type === 'food' || p.type === 'merch') && p.status === 'open'
   );
 
+  // Every candidate below is routed against the SAME live state, so build the
+  // weighted graph (and the naive comparison graph computeRoute may need)
+  // ONCE per triage pass instead of once per POI — previously each candidate
+  // paid a full graph construction plus up to three Dijkstra runs.
+  const passGraphs = {
+    weighted: buildGraph(EDGES, ZONES, sensoryFilters, gateStatus, density, routedLoad),
+    naive: buildGraph(EDGES, ZONES, sensoryFilters, {}, {}, {}),
+  };
+
   let bestPoi: Poi | null = null;
   let bestWalkSec = Infinity;
 
@@ -82,7 +96,9 @@ export function runIncentiveTriageService(): void {
       density,
       routedLoad,
       gateStatus,
-      sensoryFilters
+      sensoryFilters,
+      undefined,
+      passGraphs
     );
 
     if ('error' in route) {

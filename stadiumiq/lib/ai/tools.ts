@@ -1,13 +1,15 @@
-import { Zone, SimState, FanContext } from '../types';
+import { Zone, SimState, FanContext, Incentive, Incident } from '../types';
 import { POIS, ZONES, EDGES, getEdgesFrom } from '../venue/venue';
 import { computeRoute as engineComputeRoute, RouteFilters } from '../engine/routing';
 import { resolveDestination, DestinationQuery } from '../engine/destinationResolver';
 import { sensoryToRouteFilters } from '../engine/sensoryFilters';
+import { prioritizeAccessibleFacilities } from '../engine/facilities';
 import { retrieve } from './rag';
 import { getForecast, getPeakCrush, ForecastSource } from '../engine/forecast';
 import { computeBaseDensity } from '../simulation/engine';
 import { detectStressHeuristic } from './stressDetection';
 import { useIncentiveStore } from '../store/incentiveStore';
+import { useSimStore } from '../store/simStore';
 
 export class UnknownToolError extends Error {
   constructor(message: string) {
@@ -20,6 +22,10 @@ export interface ToolContext {
   simSnapshot: SimState;
   zones: Zone[];
   fanContext?: FanContext;
+  // The fan's live incentives, sent by the browser with each request. The API
+  // route runs in a separate process from the browser's Zustand stores, so
+  // server-side tools must read these from the request context, not the store.
+  activeIncentives?: Incentive[];
 }
 
 export interface ToolSchema {
@@ -30,7 +36,7 @@ export interface ToolSchema {
 
 export interface ToolDefinition {
   schema: ToolSchema;
-  execute: (args: Record<string, any>, ctx: ToolContext) => Promise<unknown> | unknown;
+  execute: (args: Record<string, unknown>, ctx: ToolContext) => Promise<unknown> | unknown;
 }
 
 export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
@@ -176,7 +182,6 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
         EDGES,
         ZONES,
         POIS,
-        density,
         poiStatus,
         gateStatus
       );
@@ -228,16 +233,13 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
         };
       }
 
-      // §6.3: increment routedLoad at the exit gate on the path
-      // (done here in the tool adapter since routingService is not used by F4 directly)
-      try {
-        const { useSimStore } = require('../store/simStore');
-        const exitZone = [...result.path].reverse().find((id: string) => id.startsWith('gate-'));
-        if (exitZone) {
-          useSimStore.getState().incrementRoutedLoad(exitZone);
-        }
-      } catch {
-        // Store not available in test context — safe to swallow
+      // §6.3: increment routedLoad at the exit gate on the path. Best-effort:
+      // the store only exists per-process, so this registers in same-process
+      // (test) environments; in the deployed route handler the client's own
+      // routedLoad accounting via routingService remains the source of truth.
+      const exitZone = [...result.path].reverse().find((id: string) => id.startsWith('gate-'));
+      if (exitZone) {
+        useSimStore.getState().incrementRoutedLoad(exitZone);
       }
 
       return result;
@@ -257,12 +259,17 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
         required: ['fromZoneId', 'type'],
       },
     },
-    execute: (args) => {
+    execute: (args, ctx) => {
       const fromZoneId = args.fromZoneId as string;
       const type = args.type as string;
       const nearestOpen = !!args.nearestOpen;
+      const needsAccessible = !!ctx.fanContext?.accessibility;
 
-      let candidates = POIS.filter(p => p.type === type);
+      // M11: for accessibility-flagged fans, include the accessible variant of
+      // the requested amenity so prioritizeAccessibleFacilities can promote it.
+      let candidates = POIS.filter(
+        p => p.type === type || (needsAccessible && p.type === `${type}_accessible`)
+      );
       if (nearestOpen) {
         candidates = candidates.filter(p => p.status !== 'closed');
       }
@@ -298,6 +305,12 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
         })
         .slice(0, 3)
         .map(item => item.poi);
+
+      // M11 facility prioritization: promote an accessible variant to the top
+      // when it is comparably close to the nearest standard amenity.
+      if (needsAccessible && scored.length > 1) {
+        return prioritizeAccessibleFacilities(scored, fromZoneId, true);
+      }
 
       return scored;
     },
@@ -422,7 +435,7 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
       },
     },
     execute: (args) => {
-      return detectStressHeuristic(args.text || '');
+      return detectStressHeuristic(typeof args.text === 'string' ? args.text : '');
     },
   },
 
@@ -438,12 +451,18 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
         required: ['fromZoneId'],
       },
     },
-    execute: (args) => {
-      const active = useIncentiveStore.getState().activeIncentives.find(
-        (inc) => inc.fromZone === args.fromZoneId
+    execute: (args, ctx) => {
+      const fromZoneId = typeof args.fromZoneId === 'string' ? args.fromZoneId : '';
+      // Prefer the incentives the browser sent with the request (the store is
+      // per-process, so on the server it is always empty); fall back to the
+      // store for same-process test environments.
+      const incentives = ctx.activeIncentives ?? useIncentiveStore.getState().activeIncentives;
+      const active = incentives.find(
+        (inc) => inc.fromZone === fromZoneId
       );
       if (active) {
         return {
+          found: true,
           id: active.id,
           fromZone: active.fromZone,
           toZone: active.toZone,
@@ -452,14 +471,12 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
           expiresAt: active.expiresAt,
         };
       }
+      // Explicit "nothing here" contract — an empty-strings placeholder shape
+      // reads as a real (blank) incentive to the LLM and invites hallucination.
       return {
-        id: '',
-        fromZone: args.fromZoneId ?? '',
-        toZone: '',
-        reward: '',
-        qrPayload: '',
-        expiresAt: 0,
-        __stub: true,
+        found: false,
+        fromZone: fromZoneId,
+        message: 'No active incentives are available from this zone right now.',
       };
     },
   },
@@ -477,7 +494,7 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
       },
     },
     execute: async (args) => {
-      return await retrieve(args.query || '');
+      return await retrieve(typeof args.query === 'string' ? args.query : '');
     },
   },
 
@@ -498,26 +515,27 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition> = {
       const type = args.type as 'crowd' | 'medical' | 'assistance' | 'security';
       const note = args.note as string;
       const fanLocation = ctx.fanContext?.location;
-      
+
       if (!fanLocation) return { error: 'Unknown fan location. Could not report incident.' };
-      
-      try {
-        const { useSimStore } = require('../store/simStore');
-        const state = useSimStore.getState();
-        const newIncident = {
-          id: `ai-${Date.now()}`,
-          type,
-          zoneId: fanLocation,
-          note,
-          status: 'pending',
-          createdAt: state.matchClockSec
-        } as const;
-        
-        state.applyScenario({ incidents: [...state.incidents, newIncident] });
-        return { success: true, message: `Successfully reported ${type} issue to the organizers.` };
-      } catch (err) {
-        return { error: 'Failed to report incident to the store' };
-      }
+
+      // The route handler runs in a separate process from the browser's
+      // Zustand stores, so the incident is returned on the tool result — the
+      // agent surfaces it via meta.reportedIncident and the client applies it
+      // to the live simStore (which the organizer dashboard reads).
+      const incident: Incident = {
+        id: `ai-${Date.now()}`,
+        type,
+        zoneId: fanLocation,
+        note,
+        status: 'pending',
+        createdAt: ctx.simSnapshot.matchClockSec,
+      };
+
+      return {
+        success: true,
+        incident,
+        message: `Successfully reported ${type} issue to the organizers.`,
+      };
     }
   },
 };

@@ -120,7 +120,12 @@ export const MessageBubble = React.memo(
       </div>
     );
   },
-  (prevProps, nextProps) => prevProps.message.id === nextProps.message.id && prevProps.message.content === nextProps.message.content
+  (prevProps, nextProps) =>
+    prevProps.message.id === nextProps.message.id &&
+    prevProps.message.content === nextProps.message.content &&
+    // Re-render when this message's speak-button active state changes
+    (prevProps.activeSpeakingId === prevProps.message.id) ===
+      (nextProps.activeSpeakingId === nextProps.message.id)
 );
 
 MessageBubble.displayName = 'MessageBubble';

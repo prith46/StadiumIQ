@@ -4,12 +4,16 @@ const schema = z.object({
   LLM_PROVIDER: z.enum(['gemini', 'groq']),
   LLM_MODEL: z.string().min(1),
   LLM_API_KEY: z.string().min(1),
-  // Master doc F4 claims "aborts hangs after 15s". We align with this spec by defaulting to 15000ms.
-  LLM_TIMEOUT_MS: z.coerce.number().positive().default(15000),
+  // Per-provider-request timeout. Master doc §F4 and docs/ai-layer.md specify
+  // a default of 8000ms. (The "aborts hangs after 15s" line in the master doc
+  // is the CLIENT-side fetch abort in lib/assistant/client.ts, not this
+  // per-request provider timeout — 8s per provider call keeps a multi-call
+  // planning loop inside that 15s client budget.)
+  LLM_TIMEOUT_MS: z.coerce.number().positive().default(8000),
 });
 
-let cachedEnv: any = null;
-let parseError: any = null;
+let cachedEnv: z.infer<typeof schema> | null = null;
+let parseError: unknown = null;
 
 function parse() {
   try {
@@ -39,6 +43,6 @@ export const AI_ENV = new Proxy({} as z.infer<typeof schema>, {
     if (parseError) {
       throw parseError;
     }
-    return (cachedEnv as any)[prop];
+    return Reflect.get(cachedEnv!, prop);
   }
 });

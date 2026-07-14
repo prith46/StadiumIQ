@@ -4,21 +4,22 @@ import React, { useState } from 'react';
 import { useSimStore } from '@/lib/store/simStore';
 import { RESPONDERS } from '@/lib/venue/responders';
 import { assignResponder, isBreachPredicted } from '@/lib/engine/dispatch';
-import { generateIncidentReport } from '@/lib/ai/incidentReport';
 import { computeRoute } from '@/lib/engine/routing';
 import { EDGES, ZONES } from '@/lib/venue/venue';
 import {
-  ShieldAlert,
   UserCheck,
   CheckCircle,
   AlertTriangle,
   Loader2,
   Clock,
-  Sparkles,
-  HelpCircle
+  Sparkles
 } from 'lucide-react';
 
-export function DispatchQueue() {
+// memo(): no props, self-subscribed to its own store slices — the parent
+// Dashboard re-renders every 1s for its clock display and must not cascade here.
+export const DispatchQueue = React.memo(DispatchQueueComponent);
+
+function DispatchQueueComponent() {
   const incidents = useSimStore((s) => s.incidents || []);
   const applyScenario = useSimStore((s) => s.applyScenario);
   
@@ -98,14 +99,31 @@ export function DispatchQueue() {
       predictedBreach: incident.etaSec ? isBreachPredicted(incident.etaSec) : false,
     };
 
-    // Call mockable LLM generator
-    const reportText = await generateIncidentReport(incident, assignment);
+    // The LLM client only exists server-side (LLM_* env vars never reach the
+    // browser), so the AI report is generated via the API route.
+    let reportText: string;
+    try {
+      const res = await fetch('/api/incident-report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ incident, assignment }),
+      });
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      const data = await res.json();
+      if (typeof data.report !== 'string') throw new Error('Malformed report response');
+      reportText = data.report;
+    } catch {
+      reportText = `Incident resolved. Responder: ${assignment.responderId || 'N/A'}. Location: ${incident.zoneId}. Notes: ${incident.note}.`;
+    }
 
     // Save report locally
     setIncidentReports((prev) => ({ ...prev, [incidentId]: reportText }));
 
-    // Update store state: status -> resolved
-    const updatedIncidents = incidents.map((inc) => {
+    // Update store state: status -> resolved. Read the LIVE incidents list —
+    // the component-scope `incidents` was captured before the report fetch
+    // above, and any incident created during that await (e.g. an
+    // auto-generated live-match incident) must not be silently dropped.
+    const updatedIncidents = useSimStore.getState().incidents.map((inc) => {
       if (inc.id === incidentId) {
         return {
           ...inc,
@@ -188,7 +206,7 @@ export function DispatchQueue() {
                 {/* 2. Notes Detail */}
                 <div className="text-xs">
                   <span className="font-bold text-text-secondary uppercase text-[8px] tracking-wider block">Incident Brief</span>
-                  <p className="mt-0.5 font-medium text-text-primary text-xs">"{inc.note}"</p>
+                  <p className="mt-0.5 font-medium text-text-primary text-xs">&ldquo;{inc.note}&rdquo;</p>
                 </div>
 
                 {/* 3. Dispatch & Responder Status Details */}

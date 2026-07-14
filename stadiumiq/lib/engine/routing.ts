@@ -117,7 +117,22 @@ interface GraphEdge {
   affiliation?: 'home' | 'away' | 'neutral';
 }
 
-type Graph = Map<string, GraphEdge[]>;
+export type Graph = Map<string, GraphEdge[]>;
+
+/**
+ * Optional pre-built graphs for callers that route many origin/destination
+ * pairs against the SAME live state in one pass (e.g. incentive triage ranks
+ * every candidate POI): without this, computeRoute rebuilds the weighted
+ * graph — and possibly the naive comparison graph — once per call.
+ *
+ * `weighted` must be built with the same (filters, gateStatus, density,
+ * routedLoad) the computeRoute call receives; `naive` with the same filters
+ * and empty live state. Both are what computeRoute would build itself.
+ */
+export interface PrebuiltGraphs {
+  weighted?: Graph;
+  naive?: Graph;
+}
 
 // ---------------------------------------------------------------------------
 // Congestion formula (§6.2)
@@ -382,6 +397,18 @@ function isGateId(zoneId: string): boolean {
 // ---------------------------------------------------------------------------
 const CONGESTION_THRESHOLD = 0.5;
 
+/**
+ * Minimum routedLoad that justifies the naive-vs-weighted comparison run.
+ * routedLoadPenalty contributes 0.15 × min(load, 10) to a congestion factor
+ * that is ≥ 1, so a decayed remnant below 1 shifts an edge weight by < 15% —
+ * not enough to plausibly change which path wins, only to trigger a pointless
+ * second graph build + Dijkstra. (0.9× multiplicative decay leaves sub-1
+ * remnants around for ~20 ticks after every routing, so a `> 0` check made
+ * the comparison run on virtually every route of a session.) The comparison
+ * only feeds the `reason` explanation; path choice itself is unaffected.
+ */
+const ROUTED_LOAD_REASON_THRESHOLD = 1;
+
 // ---------------------------------------------------------------------------
 // computeRoute — main public API
 // ---------------------------------------------------------------------------
@@ -401,6 +428,8 @@ const CONGESTION_THRESHOLD = 0.5;
  * @param routedLoad         Live routed-load count per zone id
  * @param gateStatus         Live gate status map
  * @param filters            Optional route filters
+ * @param sensory            Optional one-off sensory penalties
+ * @param prebuilt           Optional pre-built graphs (see PrebuiltGraphs)
  */
 export function computeRoute(
   originZoneId: string,
@@ -411,10 +440,11 @@ export function computeRoute(
   routedLoad: Record<string, number>,
   gateStatus: Record<string, 'open' | 'congested' | 'closed'>,
   filters: RouteFilters = {},
-  sensory?: SensoryFilterOptions
+  sensory?: SensoryFilterOptions,
+  prebuilt?: PrebuiltGraphs
 ): RouteResult | RouteError {
-  // Build the weighted graph
-  const graph = buildGraph(edges, zones, filters, gateStatus, density, routedLoad, sensory);
+  // Build the weighted graph (or reuse the caller's per-pass prebuilt one)
+  const graph = prebuilt?.weighted ?? buildGraph(edges, zones, filters, gateStatus, density, routedLoad, sensory);
 
   // Primary Dijkstra run
   const primary = dijkstra(graph, originZoneId, destinationZoneId);
@@ -426,15 +456,14 @@ export function computeRoute(
       const unfiltered = buildGraph(edges, zones, {}, gateStatus, density, routedLoad);
       const check = dijkstra(unfiltered, originZoneId, destinationZoneId);
       if (check.path) {
-        const errObj = { error: 'no_accessible_route_found' as const };
-        Object.defineProperties(errObj, {
-          path: { value: null, enumerable: false },
-          etaSec: { value: null, enumerable: false },
-          reason: { value: { crowdedZones: [], avoidedGates: [] }, enumerable: false },
-          accessible: { value: false, enumerable: false },
-          noRouteFound: { value: true, enumerable: false },
-        });
-        return errObj as any;
+        return {
+          error: 'no_accessible_route_found',
+          path: null,
+          etaSec: null,
+          reason: { crowdedZones: [], avoidedGates: [] },
+          accessible: false,
+          noRouteFound: true,
+        };
       }
     }
     return { error: 'no_route_found' };
@@ -452,12 +481,12 @@ export function computeRoute(
 
   const anyCongestion =
     Object.values(density).some((d) => d > CONGESTION_THRESHOLD) ||
-    Object.values(routedLoad).some((load) => load > 0) ||
+    Object.values(routedLoad).some((load) => load >= ROUTED_LOAD_REASON_THRESHOLD) ||
     Object.values(gateStatus).some((status) => status === 'closed' || status === 'congested');
 
   if (anyCongestion) {
     // Build an unweighted (base-only) graph to find naive shortest path
-    const naiveGraph = buildGraph(edges, zones, filters, {}, {}, {});
+    const naiveGraph = prebuilt?.naive ?? buildGraph(edges, zones, filters, {}, {}, {});
     const naive = dijkstra(naiveGraph, originZoneId, destinationZoneId);
 
     if (naive.path && naive.path.join(',') !== primaryPath.join(',')) {

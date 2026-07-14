@@ -5,7 +5,11 @@ import { useSimStore } from '@/lib/store/simStore';
 import { matchPhase } from '@/lib/simulation/engine';
 import { FileText, Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
 
-export function DebriefReport() {
+// memo(): no props, self-subscribed to its own store slices — the parent
+// Dashboard re-renders every 1s for its clock display and must not cascade here.
+export const DebriefReport = React.memo(DebriefReportComponent);
+
+function DebriefReportComponent() {
   const matchClockSec = useSimStore((s) => s.matchClockSec);
   const density = useSimStore((s) => s.density || {});
   const gateStatus = useSimStore((s) => s.gateStatus || {});
@@ -56,8 +60,8 @@ export function DebriefReport() {
         throw new Error(data.error);
       }
       setReport(data.report);
-    } catch (err: any) {
-      setError(err.message || 'Failed to generate debrief report.');
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'Failed to generate debrief report.');
     } finally {
       setLoading(false);
     }

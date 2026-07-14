@@ -3,20 +3,16 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { DispatchQueue } from './DispatchQueue';
 import { useSimStore } from '@/lib/store/simStore';
-import * as incidentReport from '@/lib/ai/incidentReport';
 
-// Mock the AI Incident Report generator
-vi.mock('@/lib/ai/incidentReport', () => {
-  return {
-    generateIncidentReport: vi.fn(),
-  };
-});
+// The AI report is generated server-side via /api/incident-report — mock fetch.
+const fetchSpy = vi.fn();
 
 describe('DispatchQueue Component', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.mocked(incidentReport.generateIncidentReport).mockReset();
-    
+    fetchSpy.mockReset();
+    vi.stubGlobal('fetch', fetchSpy);
+
     useSimStore.setState({
       matchClockSec: 600,
       density: {},
@@ -28,6 +24,7 @@ describe('DispatchQueue Component', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   it('renders a calm empty state when no incidents are in queue', () => {
@@ -51,8 +48,8 @@ describe('DispatchQueue Component', () => {
 
     render(<DispatchQueue />);
 
-    // Renders the pending incident notes
-    expect(screen.getByText('"Medical issue in lower tier"')).toBeInTheDocument();
+    // Renders the pending incident notes (typographic quotes in the JSX)
+    expect(screen.getByText('“Medical issue in lower tier”')).toBeInTheDocument();
     
     // Finds the assign responder button
     const assignBtn = screen.getByRole('button', { name: /assign nearest responder/i });
@@ -116,9 +113,12 @@ describe('DispatchQueue Component', () => {
       ],
     });
 
-    vi.mocked(incidentReport.generateIncidentReport).mockResolvedValue(
-      'AI Audit Summary: Blocked stairs resolved by Guest Services Team 1.'
-    );
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        report: 'AI Audit Summary: Blocked stairs resolved by Guest Services Team 1.',
+      }),
+    });
 
     render(<DispatchQueue />);
 
@@ -129,8 +129,8 @@ describe('DispatchQueue Component', () => {
       fireEvent.click(resolveBtn);
     });
 
-    // Verify LLM report generation was requested
-    expect(incidentReport.generateIncidentReport).toHaveBeenCalled();
+    // Verify the server-side report generation was requested
+    expect(fetchSpy).toHaveBeenCalledWith('/api/incident-report', expect.any(Object));
 
     // Verify incident updated in store to resolved
     const storeIncidents = useSimStore.getState().incidents;
@@ -139,5 +139,67 @@ describe('DispatchQueue Component', () => {
     // Verify the report text appears inline
     expect(screen.getByText('AI Post-Incident Report Summary')).toBeInTheDocument();
     expect(screen.getByText('AI Audit Summary: Blocked stairs resolved by Guest Services Team 1.')).toBeInTheDocument();
+  });
+
+  it('does not drop incidents created while the resolve report fetch is in flight (stale-closure regression)', async () => {
+    useSimStore.setState({
+      incidents: [
+        {
+          id: 'inc-race',
+          type: 'assistance',
+          zoneId: 'sec-308',
+          note: 'Blocked stairs',
+          status: 'dispatched',
+          createdAt: 400,
+          responderId: 'resp-ast-1',
+          etaSec: 45,
+        },
+      ],
+    });
+
+    // Hold the report fetch open until we've injected a new incident.
+    let releaseFetch: () => void = () => {};
+    fetchSpy.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseFetch = () =>
+            resolve({ ok: true, json: async () => ({ report: 'done' }) });
+        })
+    );
+
+    render(<DispatchQueue />);
+    const resolveBtn = screen.getByRole('button', { name: /mark as resolved/i });
+
+    await act(async () => {
+      fireEvent.click(resolveBtn);
+    });
+
+    // While the report request is in flight, another incident arrives (e.g. a
+    // sequencer auto-incident or a fan SOS from another tab).
+    act(() => {
+      useSimStore.setState({
+        incidents: [
+          ...useSimStore.getState().incidents,
+          {
+            id: 'inc-late',
+            type: 'crowd',
+            zoneId: 'sec-101',
+            note: 'Arrived mid-flight',
+            status: 'pending',
+            createdAt: 410,
+          },
+        ],
+      });
+    });
+
+    await act(async () => {
+      releaseFetch();
+    });
+
+    // The fix reads the LIVE incidents list at resolve time — the mid-flight
+    // incident must survive, and the original one must be resolved.
+    const incidents = useSimStore.getState().incidents;
+    expect(incidents.map((i) => i.id)).toContain('inc-late');
+    expect(incidents.find((i) => i.id === 'inc-race')?.status).toBe('resolved');
   });
 });

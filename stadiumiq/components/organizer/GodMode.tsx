@@ -5,7 +5,6 @@ import { useSimStore } from '@/lib/store/simStore';
 import { GOD_MODE_SCENARIOS } from '@/lib/simulation/scenarios';
 import { ZONES } from '@/lib/venue/venue';
 import {
-  Settings,
   Train,
   DoorClosed,
   AlertTriangle,
@@ -13,7 +12,11 @@ import {
   Zap
 } from 'lucide-react';
 
-export function GodMode() {
+// memo(): no props, self-subscribed to its own store slices — the parent
+// Dashboard re-renders every 1s for its clock display and must not cascade here.
+export const GodMode = React.memo(GodModeComponent);
+
+function GodModeComponent() {
   const applyScenario = useSimStore((s) => s.applyScenario);
   const reset = useSimStore((s) => s.reset);
   

@@ -79,4 +79,3 @@ export const useIncentiveStore = create<IncentiveStore>((set, get) => ({
     });
   },
 }));
-export type useIncentiveStore = typeof useIncentiveStore;

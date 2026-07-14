@@ -16,7 +16,7 @@ The Proactive Smart-Exit Alerts module watches the simulation state, match clock
 
 ### `evaluateProactiveAlerts`
 
-Located in `lib/engine/proactiveAlerts.ts`, this pure, synchronous, deterministic function decides whether any alerts should fire:
+The live trigger engine is `evaluateTriggers` in `lib/engine/alertTriage.ts` (bound to the store by `lib/engine/alertService.ts`). It is a pure, synchronous, deterministic function that decides whether any alerts should fire:
 
 ```typescript
 export interface ProactiveAlertInput {
