@@ -51,6 +51,24 @@ describe('rate limiting trust model', () => {
     expect(rateLimitKey('r', req)).toBe('r:3.3.3.3');
   });
 
+  it('keys on x-forwarded-for when x-cloud-trace-context is present (Cloud Run)', () => {
+    const req = new Request('http://localhost/x', {
+      headers: {
+        'x-forwarded-for': '5.5.5.5',
+        'x-cloud-trace-context': '105445aa7843bc8bf206b12000100000/1;o=1',
+      },
+    });
+    expect(rateLimitKey('r', req)).toBe('r:5.5.5.5');
+  });
+
+  it('does NOT key on x-forwarded-for without Cloud Run trace context (bare next start)', () => {
+    const req = new Request('http://localhost/x', {
+      headers: { 'x-forwarded-for': '6.6.6.6' },
+    });
+    // No x-cloud-trace-context → header is untrusted → falls back to shared
+    expect(rateLimitKey('r', req)).toBe('r:shared');
+  });
+
   it('enforces the global per-route backstop even across distinct client IPs', () => {
     let allowed = 0;
     for (let i = 0; i < 400; i++) {

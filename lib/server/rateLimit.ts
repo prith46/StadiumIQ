@@ -65,15 +65,26 @@ export function checkRateLimit(
  *   `x-vercel-*` headers from clients are stripped by the platform, and
  *   functions are only reachable through that proxy — so its value cannot be
  *   forged by the caller.
- * - A plain `x-forwarded-for` (or `x-real-ip`) is NOT trusted as a per-client
- *   identity: on a directly-exposed `next start` deployment the caller sets
- *   it freely, and honoring it would let an attacker rotate the header to
- *   mint fresh buckets and bypass the per-client cap entirely.
+ * - On Google Cloud Run, `x-cloud-trace-context` is always injected by the
+ *   platform. When that header is present, `x-forwarded-for` is also set by
+ *   Cloud Run's load balancer (client-supplied values are stripped), making
+ *   its first entry trustworthy as a per-client key.
+ * - A bare `x-forwarded-for` with NO Cloud Run trace context is NOT trusted:
+ *   on a directly-exposed `next start` the caller sets it freely, and honouring
+ *   it would let an attacker rotate the header to mint fresh buckets and bypass
+ *   the per-client cap entirely.
  * - Without a trusted client-IP signal, every caller shares one bucket: the
  *   limit degrades to a stricter shared cap instead of becoming bypassable.
  */
 export function rateLimitKey(route: string, req: Request): string {
-  const trustedIp = req.headers.get('x-vercel-forwarded-for');
+  // Vercel: x-vercel-forwarded-for is injected by Vercel's edge proxy.
+  // Cloud Run: x-cloud-trace-context is always present; x-forwarded-for is
+  //   then trustworthy (Cloud Run's LB strips & re-adds it).
+  // Bare next start: neither trusted signal is present → fall back to 'shared'.
+  const isCloudRun = req.headers.get('x-cloud-trace-context') !== null;
+  const trustedIp =
+    req.headers.get('x-vercel-forwarded-for') ??
+    (isCloudRun ? req.headers.get('x-forwarded-for') : null);
   const ip = trustedIp ? trustedIp.split(',')[0].trim() : 'shared';
   return `${route}:${ip}`;
 }
