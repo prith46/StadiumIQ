@@ -858,7 +858,6 @@ export const StadiumMap = memo(forwardRef<StadiumMapHandle, StadiumMapProps>(
                 const zone = ZONES.find((z) => z.id === currentZoneId);
                 if (!zone) return null;
                 const p = getZoneCenter(zone);
-                const zoneSensorCount = sensorCounts[currentZoneId] ?? 0;
                 return (
                   <g id="you-are-here-marker" style={{ pointerEvents: "none" }}>
                     <circle
@@ -878,26 +877,6 @@ export const StadiumMap = memo(forwardRef<StadiumMapHandle, StadiumMapProps>(
                       stroke="white"
                       strokeWidth="1.5"
                     />
-                    {/* Unobtrusive sensorCounts readout for the fan-as-sensor mechanic */}
-                    <g transform={`translate(${p.x + 10}, ${p.y - 14})`}>
-                      <rect
-                        width={12 + String(zoneSensorCount).length * 5}
-                        height="10"
-                        rx="3"
-                        fill="rgba(17,24,39,0.75)"
-                      />
-                      <text
-                        x={6 + String(zoneSensorCount).length * 2.5}
-                        y="7.5"
-                        textAnchor="middle"
-                        fontSize="7"
-                        fontWeight="700"
-                        fill="white"
-                        aria-label={`Sensor count for your zone: ${zoneSensorCount}`}
-                      >
-                        {zoneSensorCount}
-                      </text>
-                    </g>
                   </g>
                 );
               })()}
