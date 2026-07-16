@@ -8,6 +8,7 @@ import { fileURLToPath } from "url";
 // module resolution (framer-motion, tailwind.config.ts). Pinning it explicitly
 // is the documented fix and removes the "inferred workspace root" ambiguity.
 const nextConfig: NextConfig = {
+  output: 'standalone',
   turbopack: {
     root: path.dirname(fileURLToPath(import.meta.url)),
   },
