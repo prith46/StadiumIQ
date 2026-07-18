@@ -2,8 +2,10 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { detectLanguageFromTicket } from '@/lib/ai/languageDetection';
 import { fanContextSchema } from '@/lib/validation/fanContext';
-import { allowRequest } from '@/lib/server/rateLimit';
-import { readJsonBody } from '@/lib/server/readJsonBody';
+import { guardRequest } from '@/lib/server/guardRequest';
+
+// Maximum decoded image size accepted, before base64 expansion.
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 // Hard body cap, enforced while streaming: a 5MB image is ~6.7MB of base64,
 // plus JSON envelope headroom.
@@ -16,29 +18,19 @@ const requestSchema = z.object({
 }).strict();
 
 export async function POST(req: Request) {
-  if (!allowRequest('vision', req)) {
-    return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
-  }
+  const guard = await guardRequest(req, { route: 'vision', maxBytes: BODY_MAX_BYTES, schema: requestSchema });
+  if (!guard.ok) return guard.response;
 
-  const read = await readJsonBody(req, BODY_MAX_BYTES);
-  if (!read.ok) {
-    return read.reason === 'too_large'
-      ? NextResponse.json({ error: 'Payload too large' }, { status: 413 })
-      : NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 });
-  }
-
-  const result = requestSchema.safeParse(read.body);
-  if (!result.success) {
-    return NextResponse.json({ error: 'Invalid request payload' }, { status: 400 });
-  }
-
-  const validated = result.data;
+  const validated = guard.data;
 
   // Size check FIRST (cheap length arithmetic) — never run the base64 regex
   // over a payload that is already too large to accept.
   const approximateBytes = (validated.imageBase64.length * 3) / 4;
-  if (approximateBytes > 5 * 1024 * 1024) {
-    return NextResponse.json({ error: 'Payload too large: Image exceeds 5MB' }, { status: 400 });
+  if (approximateBytes > MAX_IMAGE_BYTES) {
+    return NextResponse.json(
+      { error: `Payload too large: Image exceeds ${MAX_IMAGE_BYTES / (1024 * 1024)}MB` },
+      { status: 400 }
+    );
   }
 
   // Validate the payload is actually base64 before forwarding to the provider.

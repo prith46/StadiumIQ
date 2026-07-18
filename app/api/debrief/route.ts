@@ -3,8 +3,7 @@ import { z } from 'zod';
 import { createClient } from '@/lib/ai/client';
 import { parseLlmJson } from '@/lib/ai/parseLlmJson';
 import { simSnapshotSchema } from '@/lib/validation/simSnapshot';
-import { allowRequest } from '@/lib/server/rateLimit';
-import { readJsonBody } from '@/lib/server/readJsonBody';
+import { guardRequest } from '@/lib/server/guardRequest';
 import { aggregateDebriefData, DebriefInput } from '@/lib/engine/debriefData';
 import { matchPhase } from '@/lib/simulation/engine';
 import { EDGES } from '@/lib/venue/venue';
@@ -55,23 +54,10 @@ function buildFallbackReport(data: DebriefInput): string {
 }
 
 export async function POST(req: Request) {
-  if (!allowRequest('debrief', req)) {
-    return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
-  }
+  const guard = await guardRequest(req, { route: 'debrief', maxBytes: BODY_MAX_BYTES, schema: requestSchema });
+  if (!guard.ok) return guard.response;
 
-  const read = await readJsonBody(req, BODY_MAX_BYTES);
-  if (!read.ok) {
-    return read.reason === 'too_large'
-      ? NextResponse.json({ error: 'Payload too large' }, { status: 413 })
-      : NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 });
-  }
-
-  const result = requestSchema.safeParse(read.body);
-  if (!result.success) {
-    return NextResponse.json({ error: 'Invalid request payload' }, { status: 400 });
-  }
-
-  const validated = result.data;
+  const validated = guard.data;
 
   const isFullTime = validated.sequencerPhase
     ? (validated.sequencerPhase === 'post' || validated.sequencerPhase === 'idle')

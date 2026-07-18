@@ -12,7 +12,7 @@ import {
 } from '../simulation/engine';
 import { generateTimeline } from '../simulation/timeline';
 import { createSimChannel } from '../simulation/channel';
-import { validateUploadDatasetObject } from '../validation/uploadDataset';
+import { validateUploadDatasetObject, UPLOAD_MAX_CHARS } from '../validation/uploadDataset';
 import {
   computeSequencerState,
   initSequencer,
@@ -618,7 +618,7 @@ export const useSimStore = create<SimStore>((set, get) => {
       if (typeof str !== 'string') {
         return { ok: false, error: 'Invalid JSON payload' };
       }
-      if (str.length > 200000) {
+      if (str.length > UPLOAD_MAX_CHARS) {
         return { ok: false, error: 'Dataset too large' };
       }
 

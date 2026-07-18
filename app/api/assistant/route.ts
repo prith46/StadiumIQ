@@ -5,8 +5,7 @@ import type { ToolContext } from '@/lib/ai/tools';
 import { ZONES } from '@/lib/venue/venue';
 import { simSnapshotSchema } from '@/lib/validation/simSnapshot';
 import { fanContextSchema } from '@/lib/validation/fanContext';
-import { allowRequest } from '@/lib/server/rateLimit';
-import { readJsonBody } from '@/lib/server/readJsonBody';
+import { guardRequest } from '@/lib/server/guardRequest';
 
 // Server-side cap on prior turns forwarded to the model (token efficiency).
 const HISTORY_MAX_TURNS = 8;
@@ -37,25 +36,10 @@ const requestSchema = z.object({
 }).strict();
 
 export async function POST(req: Request) {
-  if (!allowRequest('assistant', req)) {
-    return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
-  }
+  const guard = await guardRequest(req, { route: 'assistant', maxBytes: BODY_MAX_BYTES, schema: requestSchema });
+  if (!guard.ok) return guard.response;
 
-  const read = await readJsonBody(req, BODY_MAX_BYTES);
-  if (!read.ok) {
-    return read.reason === 'too_large'
-      ? NextResponse.json({ error: 'Payload too large' }, { status: 413 })
-      : NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 });
-  }
-  const body: unknown = read.body;
-
-  const result = requestSchema.safeParse(body);
-  if (!result.success) {
-    // Never surface raw zod error internals to the client (§8).
-    return NextResponse.json({ error: 'Invalid request payload' }, { status: 400 });
-  }
-
-  const validated = result.data;
+  const validated = guard.data;
   const ctx: ToolContext = {
     simSnapshot: {
       ...validated.simSnapshot,

@@ -7,8 +7,7 @@ import { computeConfidenceBand } from '@/lib/engine/forecastConfidence';
 import { RESPONDERS } from '@/lib/venue/responders';
 import { EDGES } from '@/lib/venue/venue';
 import { simSnapshotSchema } from '@/lib/validation/simSnapshot';
-import { allowRequest } from '@/lib/server/rateLimit';
-import { readJsonBody } from '@/lib/server/readJsonBody';
+import { guardRequest } from '@/lib/server/guardRequest';
 
 // Hard body cap, enforced while streaming. The copilot intentionally receives
 // the FULL forecast timeline (root-cause tracing reads history), so this cap
@@ -22,23 +21,10 @@ const requestSchema = z.object({
 }).strict();
 
 export async function POST(req: Request) {
-  if (!allowRequest('copilot', req)) {
-    return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
-  }
+  const guard = await guardRequest(req, { route: 'copilot', maxBytes: BODY_MAX_BYTES, schema: requestSchema });
+  if (!guard.ok) return guard.response;
 
-  const read = await readJsonBody(req, BODY_MAX_BYTES);
-  if (!read.ok) {
-    return read.reason === 'too_large'
-      ? NextResponse.json({ error: 'Payload too large' }, { status: 413 })
-      : NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 });
-  }
-
-  const result = requestSchema.safeParse(read.body);
-  if (!result.success) {
-    return NextResponse.json({ error: 'Invalid request payload' }, { status: 400 });
-  }
-
-  const validated = result.data;
+  const validated = guard.data;
 
   try {
     if (validated.type === 'forecast') {
