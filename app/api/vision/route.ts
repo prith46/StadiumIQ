@@ -41,8 +41,13 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Payload too large: Image exceeds 5MB' }, { status: 400 });
   }
 
-  // Validate the payload is actually base64 before forwarding to the provider
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(validated.imageBase64)) {
+  // Validate the payload is actually base64 before forwarding to the provider.
+  // Canonical base64 is always a multiple of 4 chars (browser btoa/toDataURL
+  // pad) — check that first, it's O(1) before the linear regex scan.
+  if (
+    validated.imageBase64.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(validated.imageBase64)
+  ) {
     return NextResponse.json({ error: 'Invalid image encoding: expected base64' }, { status: 400 });
   }
 

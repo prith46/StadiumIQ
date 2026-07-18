@@ -9,6 +9,14 @@ import { reevaluateAiEnv } from '../../lib/ai/env';
 // (See the `no hardcoded provider/model ids in shipped source` guard below.)
 const TEST_MODEL_ID = 'test-model';
 
+/** Shape of the Gemini request body fields these tests assert on. */
+interface SentGeminiBody {
+  contents: Array<{
+    role: string;
+    parts: Array<{ text?: string; functionCall?: { name: string }; thoughtSignature?: string }>;
+  }>;
+}
+
 describe('AI Client Adapter', () => {
   const originalEnv = { ...process.env };
 
@@ -77,9 +85,9 @@ describe('AI Client Adapter', () => {
     // Verify raw secret error message is sanitized/hidden in error message
     try {
       await client.chat([{ role: 'user', content: 'hello' }], []);
-    } catch (err: any) {
-      expect(err.message).not.toContain('Raw secret error message');
-      expect(err.message).toContain('Gemini communication failure');
+    } catch (err) {
+      expect((err as Error).message).not.toContain('Raw secret error message');
+      expect((err as Error).message).toContain('Gemini communication failure');
     }
   });
 
@@ -138,13 +146,13 @@ describe('AI Client Adapter', () => {
       []
     );
 
-    const sentBody = JSON.parse((fetchSpy.mock.calls[0][1] as any).body as string);
-    const modelTurn = sentBody.contents.find((c: any) => c.role === 'model');
+    const sentBody = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string) as SentGeminiBody;
+    const modelTurn = sentBody.contents.find((c) => c.role === 'model');
     expect(modelTurn).toBeDefined();
-    const fcPart = modelTurn.parts.find((p: any) => p.functionCall);
-    expect(fcPart.functionCall.name).toBe('findAmenity');
+    const fcPart = modelTurn!.parts.find((p) => p.functionCall);
+    expect(fcPart!.functionCall!.name).toBe('findAmenity');
     // The critical assertion: the signature is echoed back on the same part.
-    expect(fcPart.thoughtSignature).toBe('SIG_ABC123');
+    expect(fcPart!.thoughtSignature).toBe('SIG_ABC123');
   });
 
   it('omits thoughtSignature on the functionCall part when the model turn has none (Groq-style)', async () => {
@@ -169,12 +177,12 @@ describe('AI Client Adapter', () => {
       []
     );
 
-    const sentBody = JSON.parse((fetchSpy.mock.calls[0][1] as any).body as string);
-    const modelTurn = sentBody.contents.find((c: any) => c.role === 'model');
-    const fcPart = modelTurn.parts.find((p: any) => p.functionCall);
+    const sentBody = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string) as SentGeminiBody;
+    const modelTurn = sentBody.contents.find((c) => c.role === 'model');
+    const fcPart = modelTurn!.parts.find((p) => p.functionCall);
     // No signature present → the key must be absent (not undefined/null), so we
     // never send an empty thought_signature that Gemini would reject.
-    expect('thoughtSignature' in fcPart).toBe(false);
+    expect('thoughtSignature' in fcPart!).toBe(false);
   });
 
   it('performs ZERO retries on a 4xx client error', async () => {
@@ -196,7 +204,7 @@ describe('AI Client Adapter', () => {
 });
 
 /**
- * Firm invariant guard (docs/M2-assistant.md §Model/Provider Configuration):
+ * Firm invariant guard (docs/STADIUMIQ-MASTER-DOCUMENTATION.md §5.0):
  * provider/model ids live ONLY in `.env`, never hardcoded in shipped source.
  * This recursively scans lib/, app/, and components/ (excluding test files) and
  * fails if any provider/model id literal is present — the automated grep-checker

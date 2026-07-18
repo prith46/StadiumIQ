@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { aggregateDebriefData } from './debriefData';
-import type { SimState, Edge, Incident } from '../types';
+import type { SimState, Incident } from '../types';
 
 function baseState(overrides: Partial<SimState> = {}): SimState {
   return {

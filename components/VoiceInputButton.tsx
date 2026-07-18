@@ -1,11 +1,14 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useSyncExternalStore } from "react";
 import { Mic, MicOff, AlertCircle } from "lucide-react";
 import { motion, useReducedMotion } from "framer-motion";
 import { useSimStore } from "../lib/store/simStore";
 import { createSpeechRecognizer, getSpeechRecognitionConstructor } from "../lib/voice/speechRecognition";
 import { toSpeechLocaleTag } from "../lib/voice/languageTags";
+
+// Browser speech support never changes within a session — no re-subscription needed.
+const emptySubscribe = () => () => {};
 
 interface VoiceInputButtonProps {
   onTranscript: (text: string) => void;
@@ -16,16 +19,17 @@ export function VoiceInputButton({ onTranscript, disabled = false }: VoiceInputB
   const language = useSimStore((s) => s.fanContext.language) || "en";
   const shouldReduceMotion = useReducedMotion();
 
-  const [isSupported, setIsSupported] = useState(false);
+  // Feature detection: false during SSR (server snapshot), the real browser
+  // capability on the client — no effect-driven setState pass needed.
+  const isSupported = useSyncExternalStore(
+    emptySubscribe,
+    () => !!getSpeechRecognitionConstructor(),
+    () => false
+  );
   const [isListening, setIsListening] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const recognizerRef = useRef<ReturnType<typeof createSpeechRecognizer>>(null);
-
-  // Feature detection check on mount
-  useEffect(() => {
-    setIsSupported(!!getSpeechRecognitionConstructor());
-  }, []);
 
   // Clean up SpeechRecognition session on unmount
   useEffect(() => {

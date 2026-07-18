@@ -7,7 +7,7 @@ import { useAlertStore } from '@/lib/store/alertStore';
 
 // Mock prefers-reduced-motion to false
 vi.mock("framer-motion", async (importOriginal) => {
-  const original = await importOriginal<any>();
+  const original = await importOriginal<typeof import("framer-motion")>();
   return {
     ...original,
     useReducedMotion: () => false,

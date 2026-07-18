@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { getCopilotBrief, getForecastBrief } from './copilot';
+import { getCopilotBrief, getForecastBrief, CopilotBrief, ForecastBrief } from './copilot';
 import * as aiClient from './client';
-import { Incident, DensityFrame } from '../types';
+import { DensityFrame } from '../types';
 
 // Mock the AI client module
 vi.mock('./client', () => {
@@ -65,7 +65,7 @@ describe('Organizer AI Copilot Service', () => {
       const mockClient = aiClient.createClient();
       vi.mocked(mockClient.chat).mockRejectedValue(new Error('LLM Timeout'));
 
-      const brief: any = await getCopilotBrief(input);
+      const brief = (await getCopilotBrief(input)) as CopilotBrief;
 
       // The fallback must SAY it is a fallback — never claim the primary
       // system is healthy when the LLM call just failed.
@@ -123,10 +123,10 @@ describe('Organizer AI Copilot Service', () => {
         toolCalls: [],
       });
 
-      const brief: any = await getForecastBrief({
+      const brief = (await getForecastBrief({
         timeline,
         matchClockSec: 600,
-      });
+      })) as ForecastBrief;
 
       expect(brief.peakAtSec).toBe(1500);
       expect(brief.narrative).toContain('Deterministic peak density is predicted at match clock 25:00');

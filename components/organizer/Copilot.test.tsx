@@ -31,7 +31,7 @@ describe('Copilot React Component', () => {
         ],
         recommendedActions: ['Monitor gate-a closely.']
       }),
-    } as any);
+    } as unknown as Response);
 
     render(<Copilot />);
 
@@ -69,7 +69,7 @@ describe('Copilot React Component', () => {
         narrative: 'A peak crowd of 85% is predicted in 15 minutes.',
         staffingRecommendation: 'Deploy extra stewards to sec-101.'
       }),
-    } as any);
+    } as unknown as Response);
 
     render(<Copilot />);
 
@@ -101,7 +101,7 @@ describe('Copilot React Component', () => {
         narrative: 'Peak crush predicted shortly.',
         staffingRecommendation: 'Hold current staffing levels.'
       }),
-    } as any);
+    } as unknown as Response);
 
     render(<Copilot />);
 

@@ -4,12 +4,12 @@ import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import HomePage from '@/app/page';
 import { useSimStore } from '@/lib/store/simStore';
 import { useRoleStore } from '@/lib/store/roleStore';
-import { ZONES } from '@/lib/venue/venue';
+
 import { AppShell } from '@/components/AppShell';
 
 let mockReducedMotion = false;
 vi.mock('framer-motion', async (importOriginal) => {
-  const original = await importOriginal<any>();
+  const original = await importOriginal<typeof import('framer-motion')>();
   return {
     ...original,
     useReducedMotion: () => mockReducedMotion,
@@ -47,7 +47,7 @@ describe('Mobile / Responsive Fan Layout Integration', () => {
       window.dispatchEvent(new Event('resize'));
     });
 
-    const { container } = render(<HomePage />);
+    render(<HomePage />);
 
     // In desktop, the assistant should be mounted inline, and chat trigger should be absent
     const chatTrigger = screen.queryByTestId('mobile-chat-trigger');
@@ -63,7 +63,7 @@ describe('Mobile / Responsive Fan Layout Integration', () => {
       window.dispatchEvent(new Event('resize'));
     });
 
-    const { container } = render(<HomePage />);
+    render(<HomePage />);
 
     // In mobile layout, chat trigger button must be present
     const chatTrigger = screen.getByTestId('mobile-chat-trigger');

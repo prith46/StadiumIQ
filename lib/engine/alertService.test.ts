@@ -3,6 +3,7 @@ import { runAlertTriageService } from './alertService';
 import { useSimStore } from '../store/simStore';
 import { useAlertStore } from '../store/alertStore';
 import * as routingModule from './routing';
+import type { RouteFilters } from './routing';
 
 /**
  * M10: proves the exit-nudge (M6) call site actually merges the fan's
@@ -42,7 +43,7 @@ describe('alertService — M10 sensory preference wiring', () => {
     expect(spy).toHaveBeenCalled();
     // Every call this service made to the pure engine must carry the merged filter.
     const sawAvoidAffiliation = spy.mock.calls.some(
-      (call) => (call[7] as any)?.avoidAffiliation === 'away'
+      (call) => (call[7] as RouteFilters | undefined)?.avoidAffiliation === 'away'
     );
     expect(sawAvoidAffiliation).toBe(true);
 
@@ -65,7 +66,7 @@ describe('alertService — M10 sensory preference wiring', () => {
     runAlertTriageService();
 
     const sawQuietDefaults = spy.mock.calls.some((call) => {
-      const filters = call[7] as any;
+      const filters = call[7] as RouteFilters | undefined;
       return filters?.avoidEnclosed === true && filters?.maxNoise === 'low';
     });
     expect(sawQuietDefaults).toBe(true);

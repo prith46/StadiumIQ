@@ -4,6 +4,7 @@ import { decayRoutedLoad } from '../simulation/engine';
 import { computeRoute } from './routing';
 import { computeServiceRoute } from './routingService';
 import * as routingModule from './routing';
+import type { RouteFilters } from './routing';
 import { EDGES, ZONES } from '../venue/venue';
 
 describe('Routing Service & Simulation Reset Integration', () => {
@@ -131,7 +132,7 @@ describe('Routing Service & Simulation Reset Integration', () => {
       computeServiceRoute({ kind: 'nearestExit' });
 
       expect(spy).toHaveBeenCalled();
-      const filters = spy.mock.calls[0][7] as any;
+      const filters = spy.mock.calls[0][7] as RouteFilters | undefined;
       expect(filters?.avoidEnclosed).toBe(true);
       expect(filters?.maxNoise).toBe('low');
 

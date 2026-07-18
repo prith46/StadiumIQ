@@ -20,7 +20,6 @@ export function OnboardingScreen({ onComplete }: OnboardingScreenProps) {
   const [showPicker, setShowPicker] = useState(false);
   const [pendingZoneId, setPendingZoneId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [announcement, setAnnouncement] = useState('');
 
   const setFanLocation = useSimStore((s) => s.setFanLocation);
   const setFanTicket = useSimStore((s) => s.setFanTicket);
@@ -44,13 +43,16 @@ export function OnboardingScreen({ onComplete }: OnboardingScreenProps) {
     setStep('confirming');
   };
 
+  // Screen-reader live announcement, derived from the confirmation step (the
+  // aria-live region announces the text whenever it changes — no state needed).
+  const announcement =
+    step === 'confirming' && pendingZoneInfo
+      ? `Location set to Section ${pendingZoneInfo.label}`
+      : '';
+
   // Run the confirmation phase
   useEffect(() => {
     if (step !== 'confirming' || !pendingZoneId || !pendingZoneInfo) return;
-
-    // Trigger screen reader live announcement
-    const text = `Location set to Section ${pendingZoneInfo.label}`;
-    setAnnouncement(text);
 
     const timer = setTimeout(() => {
       try {

@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { resolveDestination, DestinationQuery } from './destinationResolver';
+import { resolveDestination } from './destinationResolver';
 import { Edge, Zone, Poi, PoiType } from '../types';
 
 // ---------------------------------------------------------------------------

@@ -101,8 +101,8 @@ describe('Multilingual Concierge - Language Detection (M12)', () => {
           countryCode: 'FR',
           seat: '22'
         });
-        expect((result.ticketData as any).system_override_prompt).toBeUndefined();
-        expect((result.ticketData as any).malicious_script).toBeUndefined();
+        expect((result.ticketData as unknown as Record<string, unknown>).system_override_prompt).toBeUndefined();
+        expect((result.ticketData as unknown as Record<string, unknown>).malicious_script).toBeUndefined();
       }
     });
 

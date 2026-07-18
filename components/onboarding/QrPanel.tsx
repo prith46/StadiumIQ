@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import QRCode from 'qrcode';
 import { generateDemoQrPayload, parseQrPayload } from '../../lib/onboarding/qr';
 import { CameraQrScan } from './CameraQrScan';
@@ -19,9 +19,19 @@ export function QrPanel({ onScan, onError, onShowPicker }: QrPanelProps) {
   // Memoize payload to ensure QR is not unnecessarily regenerated
   const demoPayload = useMemo(() => generateDemoQrPayload('sec-214'), []);
 
+  // Latest-callback ref (same pattern as CrowdAgentLayer's densityRef): the
+  // parent passes an inline `onError` whose identity changes every render —
+  // depending on it directly would re-run QR generation on every parent
+  // re-render for no reason.
+  const onErrorRef = useRef(onError);
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
+
+  // `loading` initializes to true, so no synchronous reset is needed here —
+  // the effect only flips it off once QR generation resolves.
   useEffect(() => {
     let active = true;
-    setLoading(true);
 
     QRCode.toString(
       demoPayload,
@@ -37,7 +47,7 @@ export function QrPanel({ onScan, onError, onShowPicker }: QrPanelProps) {
         if (active) {
           setLoading(false);
           if (err) {
-            onError('Could not generate QR code');
+            onErrorRef.current('Could not generate QR code');
           } else if (svgString) {
             setQrSvg(svgString);
           }
@@ -48,7 +58,7 @@ export function QrPanel({ onScan, onError, onShowPicker }: QrPanelProps) {
     return () => {
       active = false;
     };
-  }, [demoPayload, onError]);
+  }, [demoPayload]);
 
   const handleSimulateScan = () => {
     // 500-byte security check is run inside parseQrPayload

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from 'react';
-import { motion } from 'framer-motion';
+import { motion, useReducedMotion } from 'framer-motion';
 import QRCode from 'qrcode';
 import { useSimStore } from '../../lib/store/simStore';
 import { dispatchMapActions, StadiumMapHandle } from '../../lib/assistant/mapActionDispatcher';
@@ -31,36 +31,29 @@ export const IncentiveCard: React.FC<IncentiveCardProps> = ({
   const isExpired = secondsRemaining <= 0;
   const shouldAutoDismiss = secondsRemaining <= -10; // 10s simulated grace period
 
-  // Detect prefers-reduced-motion to skip exit animations
-  const prefersReducedMotion = useRef(false);
-  useEffect(() => {
-    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
-      const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
-      prefersReducedMotion.current = mq.matches;
-      const handler = (e: MediaQueryListEvent) => {
-        prefersReducedMotion.current = e.matches;
-      };
-      mq.addEventListener('change', handler);
-      return () => mq.removeEventListener('change', handler);
-    }
-  }, []);
+  // Skip exit animations under prefers-reduced-motion — same source of truth
+  // as every other animated component (framer-motion's reactive hook).
+  const prefersReducedMotion = useReducedMotion();
 
   // Handle manual dismiss with fade transition
   const handleDismiss = React.useCallback(() => {
     if (isExiting) return;
-    const fadeDuration = prefersReducedMotion.current ? 0 : EXIT_FADE_MS;
+    const fadeDuration = prefersReducedMotion ? 0 : EXIT_FADE_MS;
     setIsExiting(true);
     if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
     exitTimerRef.current = setTimeout(() => {
       onDismiss(incentive.id);
     }, fadeDuration);
-  }, [incentive.id, onDismiss, isExiting]);
+  }, [incentive.id, onDismiss, isExiting, prefersReducedMotion]);
 
-  // Trigger auto-dismiss after grace period
+  // Trigger auto-dismiss after the grace period. Scheduled on a zero-delay
+  // timer so the state transition happens outside the synchronous effect body
+  // (dismissal is timer-driven either way — this just makes the first hop
+  // explicit).
   useEffect(() => {
-    if (shouldAutoDismiss && !isExiting) {
-      handleDismiss();
-    }
+    if (!shouldAutoDismiss || isExiting) return;
+    const id = setTimeout(handleDismiss, 0);
+    return () => clearTimeout(id);
   }, [shouldAutoDismiss, isExiting, handleDismiss]);
 
   // Clean up timers on unmount

@@ -576,7 +576,7 @@ describe('computeRoute — real venue.ts integration smoke', () => {
   // avoidAffiliation can only inflate the ETA of the final edge into an
   // opposing-affiliation SECTION destination — it can never reroute a path away
   // from one mid-journey. This is a real, documented limitation (see
-  // docs/M10-hypersensory.md), not a bug: it reflects that only exclusive seating
+  // docs/STADIUMIQ-MASTER-DOCUMENTATION.md §4 M10), not a bug: it reflects that only exclusive seating
   // blocks carry affiliation, and fans only ever pass through shared concourses.
   it('avoidAffiliation still finds a route to an away-tagged section and increases its ETA vs. unfiltered', () => {
     const unfiltered = computeRoute(

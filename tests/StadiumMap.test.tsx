@@ -1,5 +1,5 @@
 import React, { createRef } from "react";
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, screen, act } from "@testing-library/react";
 import { StadiumMap, StadiumMapHandle } from "@/components/StadiumMap";
 import { StadiumMapErrorBoundary } from "@/components/StadiumMapErrorBoundary";

@@ -4,7 +4,7 @@
     {
       "name": "stadiumiq-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "stadiumiq", "run", "dev"],
+      "runtimeArgs": ["run", "dev"],
       "port": 3000,
       "autoPort": false
     }

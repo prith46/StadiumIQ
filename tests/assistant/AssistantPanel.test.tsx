@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { AssistantPanel } from '../../components/assistant/AssistantPanel';
 import * as client from '../../lib/assistant/client';
 import { StadiumMapHandle } from '../../lib/assistant/mapActionDispatcher';
@@ -25,7 +25,7 @@ vi.mock('../../lib/voice/speechSynthesis', () => ({
 
 // Mock prefers-reduced-motion to false
 vi.mock("framer-motion", async (importOriginal) => {
-  const original = await importOriginal<any>();
+  const original = await importOriginal<typeof import("framer-motion")>();
   return {
     ...original,
     useReducedMotion: () => false,

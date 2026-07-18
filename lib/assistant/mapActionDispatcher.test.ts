@@ -54,7 +54,7 @@ describe('Map action dispatcher', () => {
       { op: 'highlight' }, // missing zoneId
       { op: 'route', path: [] }, // empty path
       { op: 'pin' }, // missing zoneId
-      { op: 'unknown' as any }, // unknown operation
+      { op: 'unknown' as unknown as MapAction['op'] }, // unknown operation
     ];
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -180,7 +180,7 @@ describe('Map action dispatcher', () => {
       { op: 'pin', zoneId: 'sec-108', kind: 'incident' },
     ];
 
-    const dispatchPromise = dispatchMapActions(actions, handle);
+    void dispatchMapActions(actions, handle);
 
     // Let microtasks run
     await Promise.resolve();

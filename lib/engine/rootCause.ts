@@ -18,7 +18,7 @@ export interface CauseLink {
   secondsAgo: number;
   // 'none' is a deliberate addition beyond the spec's 3-value union: it is
   // the only truthful way to represent "no fabricated cause" (see
-  // docs/root-cause.md) while still returning a well-typed CauseLink.
+  // docs/STADIUMIQ-MASTER-DOCUMENTATION.md §4 M25) while still returning a well-typed CauseLink.
   kind: 'gate_status' | 'incident' | 'adjacent_zone' | 'none';
 }
 

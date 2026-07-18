@@ -62,7 +62,7 @@ describe('IncentiveStack Component & Reactive Ticking Tests', () => {
       useIncentiveStore.setState({ activeIncentives: [mockIncentive] });
     });
 
-    const { rerender } = render(<IncentiveStack mapRef={mapRef} />);
+    render(<IncentiveStack mapRef={mapRef} />);
 
     // Verify initial simulated time remaining: 300 seconds => 5:00
     expect(screen.getByText('5:00')).toBeDefined();

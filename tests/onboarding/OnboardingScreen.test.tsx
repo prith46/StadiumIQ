@@ -6,7 +6,7 @@ import { useSimStore } from "../../lib/store/simStore";
 
 // Mock prefers-reduced-motion to false by default
 vi.mock("framer-motion", async (importOriginal) => {
-  const original = await importOriginal<any>();
+  const original = await importOriginal<typeof import("framer-motion")>();
   return {
     ...original,
     useReducedMotion: () => false,

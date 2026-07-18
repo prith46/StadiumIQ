@@ -36,11 +36,11 @@ describe('DebriefReport', () => {
       timeline: [],
     });
 
-    let resolveFetch: (value: any) => void = () => {};
-    const pending = new Promise((resolve) => {
+    let resolveFetch: (value: Response) => void = () => {};
+    const pending = new Promise<Response>((resolve) => {
       resolveFetch = resolve;
     });
-    vi.mocked(global.fetch).mockReturnValue(pending as any);
+    vi.mocked(global.fetch).mockReturnValue(pending);
 
     render(<DebriefReport />);
 
@@ -54,7 +54,7 @@ describe('DebriefReport', () => {
     expect(screen.getByTestId('debrief-loading')).toBeInTheDocument();
 
     await act(async () => {
-      resolveFetch({ ok: true, json: async () => ({ report: '## Summary\nAll clear.' }) });
+      resolveFetch({ ok: true, json: async () => ({ report: '## Summary\nAll clear.' }) } as unknown as Response);
     });
   });
 
@@ -70,7 +70,7 @@ describe('DebriefReport', () => {
     vi.mocked(global.fetch).mockResolvedValue({
       ok: true,
       json: async () => ({ report: '## Summary\nOperations ran smoothly with one bottleneck.' }),
-    } as any);
+    } as unknown as Response);
 
     render(<DebriefReport />);
 
@@ -91,7 +91,7 @@ describe('DebriefReport', () => {
       timeline: [],
     });
 
-    vi.mocked(global.fetch).mockResolvedValue({ ok: false, status: 500, json: async () => ({}) } as any);
+    vi.mocked(global.fetch).mockResolvedValue({ ok: false, status: 500, json: async () => ({}) } as unknown as Response);
 
     render(<DebriefReport />);
 

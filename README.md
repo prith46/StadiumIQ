@@ -153,7 +153,7 @@ top-level keys are rejected. Valid uploads broadcast to every open tab.
 | `lib/venue/` | The venue graph, the single source of truth for both map and routing |
 | `lib/store/` | Zustand stores |
 | `lib/validation/`, `lib/server/` | Zod request schemas, rate limiter, size-capped body reader |
-| `docs/` | `STADIUMIQ-MASTER-DOCUMENTATION.md` plus one doc per module |
+| `docs/` | `STADIUMIQ-MASTER-DOCUMENTATION.md` (canonical reference; §4 covers every module M1–M29 and foundation F1–F4) plus a Word-format copy |
 
 The API key stays server-side. Every request body is Zod-validated with a strict schema, size
 capped while streaming, and rate limited.

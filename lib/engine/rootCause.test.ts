@@ -6,8 +6,8 @@ function makeEdge(from: string, to: string): Edge {
   return { from, to, baseWalkSec: 10, accessible: true, enclosed: false, noise: 'low' };
 }
 
-function frame(atSec: number, density: Record<string, number>, gateStatus: Record<string, string> = {}): DensityFrame {
-  return { atSec, density, gateStatus: gateStatus as any };
+function frame(atSec: number, density: Record<string, number>, gateStatus: DensityFrame['gateStatus'] = {}): DensityFrame {
+  return { atSec, density, gateStatus };
 }
 
 describe('traceRootCause', () => {

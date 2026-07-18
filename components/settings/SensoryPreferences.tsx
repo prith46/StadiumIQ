@@ -16,7 +16,8 @@ const AFFILIATION_OPTIONS = [
  * Writes directly to `FanContext.sensory` via `simStore`'s `setSensoryPreferences`
  * action, so every subsequent computeRoute call across chat (M2), alerts (M6), and
  * incentives (M9) picks up the preference via `sensoryToRouteFilters` without the
- * fan having to re-state it. See docs/M10-hypersensory.md for the full mapping.
+ * fan having to re-state it. See docs/STADIUMIQ-MASTER-DOCUMENTATION.md §4 (M10)
+ * for the full mapping.
  */
 export function SensoryPreferences() {
   const sensory = useSimStore((s) => s.fanContext.sensory);

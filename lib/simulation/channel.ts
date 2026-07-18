@@ -10,7 +10,7 @@ export type ChannelMessage =
   // M29: broadcast ONCE per session by whichever tab starts it — every other
   // tab adopts this seed + start time and independently (re-)derives the
   // identical sequencer state via `computeSequencerState`, rather than this
-  // message being repeated per tick. See docs/match-sequencer.md.
+  // message being repeated per tick. See docs/STADIUMIQ-MASTER-DOCUMENTATION.md §4 (M29).
   | { type: 'SEQUENCER_INIT'; seed: number; sessionStartedAtMs: number; senderId: string; timestamp: number };
 
 export const CHANNEL_NAME = 'stadiumiq';

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { SOSOverlay } from './SOSOverlay';
 import { useSimStore } from '../lib/store/simStore';

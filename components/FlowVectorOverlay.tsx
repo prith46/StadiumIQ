@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import React, { useMemo } from "react";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { pt, cx, cy } from "@/lib/venue/geometry";
 import { Zone } from "@/lib/types";
 import { FlowVector } from "@/lib/engine/flowVectors";
@@ -27,17 +27,10 @@ function getZoneCenter(zone: Zone): { x: number; y: number } {
 }
 
 const FlowVectorOverlayComponent: React.FC<FlowVectorOverlayProps> = ({ flowVectors, zones }) => {
-  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
-
-  useEffect(() => {
-    if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
-      const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-      setPrefersReducedMotion(mq.matches);
-      const handler = (e: MediaQueryListEvent) => setPrefersReducedMotion(e.matches);
-      mq.addEventListener("change", handler);
-      return () => mq.removeEventListener("change", handler);
-    }
-  }, []);
+  // Same source of truth as every other animated component in the app:
+  // framer-motion's reactive reduced-motion hook, instead of a hand-rolled
+  // matchMedia listener.
+  const prefersReducedMotion = useReducedMotion();
 
   const arrows = useMemo(() => {
     return flowVectors

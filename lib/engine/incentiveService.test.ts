@@ -5,6 +5,7 @@ import { useIncentiveStore } from '../store/incentiveStore';
 import { parseIncentivePayload } from '../onboarding/qr';
 import { ZONES, POIS } from '../venue/venue';
 import * as routingModule from './routing';
+import type { RouteFilters } from './routing';
 
 describe('Incentive Triage Service Integration', () => {
   const gates = ZONES.filter((z) => z.type === 'gate');
@@ -201,7 +202,7 @@ describe('Incentive Triage Service Integration', () => {
 
     expect(spy).toHaveBeenCalled();
     const sawQuietFilters = spy.mock.calls.some((call) => {
-      const filters = call[7] as any;
+      const filters = call[7] as RouteFilters | undefined;
       return filters?.avoidEnclosed === true && filters?.maxNoise === 'low';
     });
     expect(sawQuietFilters).toBe(true);

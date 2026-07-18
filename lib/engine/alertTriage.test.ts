@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { evaluateTriggers, TriageInput, DestinationQuery, RouteResult, RouteError } from './alertTriage';
+import { evaluateTriggers, TriageInput, RouteResult } from './alertTriage';
 import type { FanContext } from '../types';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -35,7 +35,7 @@ describe('Alert Triage Engine', () => {
 
   // Mocks a successful computeRouteFn execution
   const mockComputeRoute = (path: string[], etaSec: number) => {
-    return vi.fn().mockImplementation((origin: string, dest: DestinationQuery) => {
+    return vi.fn().mockImplementation(() => {
       const res: RouteResult = {
         path,
         etaSec,
@@ -260,7 +260,7 @@ describe('Alert Triage Engine', () => {
       density: { 'gate-a': 0.8 },
     };
 
-    const computeRouteFn = vi.fn().mockImplementation((origin: string, dest: DestinationQuery) => {
+    const computeRouteFn = vi.fn().mockImplementation(() => {
       const res: RouteResult = {
         path: ['sec-101', 'gate-a'],
         etaSec: 30,

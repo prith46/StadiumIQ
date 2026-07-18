@@ -13,6 +13,7 @@ import { SOSOverlay } from "@/components/SOSOverlay";
 import { Dashboard } from "@/components/organizer/Dashboard";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { MessageSquare, X } from "lucide-react";
+import { useHasMounted } from "@/lib/hooks/useHasMounted";
 
 export default function HomePage() {
   const role = useRoleStore((s) => s.role);
@@ -28,10 +29,9 @@ export default function HomePage() {
   const sos = useSimStore((s) => s.sos);
   const [isMobile, setIsMobile] = React.useState(false);
   const [isBottomSheetOpen, setIsBottomSheetOpen] = React.useState(false);
-  const [mounted, setMounted] = React.useState(false);
+  const mounted = useHasMounted();
 
   React.useEffect(() => {
-    setMounted(true);
     // Storing a boolean (not the raw width) means React bails out of
     // re-rendering on every resize event where the breakpoint didn't change.
     const handleResize = () => {

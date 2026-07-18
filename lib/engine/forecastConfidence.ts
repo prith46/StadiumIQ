@@ -6,7 +6,7 @@ const SAMPLE_WINDOW_FRAMES = 2;
 
 // Heuristic fallback bounds, used only when no real variance source exists
 // in the timeline (e.g. too few frames to sample). Documented, not invented
-// per-call — see docs/forecast-confidence.md.
+// per-call — see docs/STADIUMIQ-MASTER-DOCUMENTATION.md §4 (M26).
 const HEURISTIC_DENSITY_PCT = 0.10; // ±10% of density
 const HEURISTIC_TIME_PCT = 0.20; // ±20% of time
 

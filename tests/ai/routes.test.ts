@@ -101,7 +101,7 @@ describe('AI API Routes', () => {
     const req = new Request('http://localhost/api/vision', {
       method: 'POST',
       body: JSON.stringify({
-        imageBase64: 'someBase64Data',
+        imageBase64: 'c29tZUJhc2U2NERhdGE=',
         mimeType: 'image/gif', // Not allowed
         fanContext
       })
@@ -137,7 +137,7 @@ describe('AI API Routes', () => {
     const req = new Request('http://localhost/api/vision', {
       method: 'POST',
       body: JSON.stringify({
-        imageBase64: 'someBase64Data',
+        imageBase64: 'c29tZUJhc2U2NERhdGE=',
         mimeType: 'image/png',
         fanContext
       })
@@ -177,7 +177,7 @@ describe('AI API Routes', () => {
 
     // Verify client was called with the sanitized string instead of raw tags
     const firstCallArgs = mockChat.mock.calls[0][0]; // ChatMessage[]
-    const userMsg = firstCallArgs.find((m: any) => m.role === 'user');
+    const userMsg = firstCallArgs.find((m: { role: string; content: string }) => m.role === 'user');
     expect(userMsg.content).toContain('[filtered]');
     const contentWithoutWrappers = userMsg.content.slice('<user_message>'.length, -'</user_message>'.length);
     expect(contentWithoutWrappers).not.toContain('</user_message>');

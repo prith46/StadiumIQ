@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { Cascade } from "@/lib/engine/cascadePrediction";
 import { CascadeAlertCard } from "./CascadeAlertCard";
 
@@ -11,15 +11,10 @@ export interface CascadeAlertSummaryProps {
 
 export function CascadeAlertSummary({ cascades, currentSec }: CascadeAlertSummaryProps) {
   const [isExpanded, setIsExpanded] = useState(false);
+  // Dismissed keys are only ever written by "Clear All", which replaces the
+  // list with exactly the then-active cascade keys — so stale keys never
+  // accumulate and no effect-driven pruning pass is needed.
   const [dismissedKeys, setDismissedKeys] = useState<string[]>([]);
-
-  // Cleanup dismissed keys that are no longer in the active cascades list
-  useEffect(() => {
-    const activeKeys = new Set(
-      cascades.map((c, i) => c.chain.map((l) => l.zoneId).join("-") || String(i))
-    );
-    setDismissedKeys((prev) => prev.filter((k) => activeKeys.has(k)));
-  }, [cascades]);
 
   if (!cascades || cascades.length === 0) return null;
 

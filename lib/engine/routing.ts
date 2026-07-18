@@ -11,7 +11,7 @@
  *   then passes the resulting zone id here. This gives cleaner separation: the pure
  *   routing algorithm never needs POI table access, and `computeRoute` stays a
  *   graph-only function that is trivially unit-testable with fixture graphs.
- *   See docs/M3-routing.md §Deviations for full rationale.
+ *   See docs/STADIUMIQ-MASTER-DOCUMENTATION.md §4 (M3) for full rationale.
  *
  * This file has NO imports from zustand, react, or any network/fetch module.
  * All live-state inputs (density, routedLoad, gateStatus) are passed in explicitly.
@@ -417,8 +417,8 @@ const ROUTED_LOAD_REASON_THRESHOLD = 1;
  * Compute the least-congested route from `originZoneId` to `destinationZoneId`.
  *
  * DEVIATION NOTE: This function accepts a pre-resolved destination zone id, not
- * the raw DestinationQuery from §6.1. See file header and docs/M3-routing.md
- * §Deviations for rationale.
+ * the raw DestinationQuery from §6.1. See the file header and
+ * docs/STADIUMIQ-MASTER-DOCUMENTATION.md §4 (M3) for rationale.
  *
  * @param originZoneId       Starting zone (must be a valid ZONES id)
  * @param destinationZoneId  End zone (pre-resolved by destinationResolver.ts)

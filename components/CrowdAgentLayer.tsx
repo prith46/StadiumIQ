@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
+import { useReducedMotion } from "framer-motion";
 import { spawnAgents, stepAgents, Agent } from "@/lib/engine/agentMotion";
 
 export interface CrowdAgentLayerProps {
@@ -27,46 +28,41 @@ export const CrowdAgentLayer: React.FC<CrowdAgentLayerProps> = ({ enabled, densi
   const rafRef = useRef<number | null>(null);
   const frameCountRef = useRef(0);
   const lastTimeRef = useRef<number | null>(null);
-  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+  // Same source of truth as every other animated component in the app
+  // (VoiceInputButton, AppShell, page.tsx): framer-motion's reactive
+  // reduced-motion hook, instead of a hand-rolled matchMedia listener.
+  const prefersReducedMotion = useReducedMotion();
 
   useEffect(() => {
     densityRef.current = density;
   }, [density]);
 
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    setPrefersReducedMotion(mq.matches);
-    const handler = (e: MediaQueryListEvent) => setPrefersReducedMotion(e.matches);
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, []);
-
   const active = enabled && !prefersReducedMotion;
 
   // Spawn once per activation (or seed change) from the latest known density —
   // agent goals don't need to track every subsequent density tick (no
-  // per-agent pathfinding), per M28's scope.
+  // per-agent pathfinding), per M28's scope. The spawn is written to the ref
+  // here and PUBLISHED to render state from the first animation frame, so all
+  // setState happens inside async rAF callbacks (never synchronously in the
+  // effect body) and stale agents can never be shown: rendering is gated on
+  // `active`, and every activation restarts this effect with a fresh spawn.
   useEffect(() => {
     if (!active) {
       agentsRef.current = [];
-      setAgents([]);
       return;
     }
-    const spawned = spawnAgents(densityRef.current, seed);
-    agentsRef.current = spawned;
-    setAgents(spawned);
-  }, [active, seed]);
 
-  useEffect(() => {
-    if (!active) return;
-
+    agentsRef.current = spawnAgents(densityRef.current, seed);
     lastTimeRef.current = null;
     frameCountRef.current = 0;
 
     const tick = (time: number) => {
       rafRef.current = requestAnimationFrame(tick);
       frameCountRef.current += 1;
+      if (frameCountRef.current === 1) {
+        // First frame after (re)activation: publish the fresh spawn.
+        setAgents(agentsRef.current);
+      }
       if (frameCountRef.current % FRAME_THROTTLE !== 0) return;
 
       const last = lastTimeRef.current;
@@ -88,7 +84,7 @@ export const CrowdAgentLayer: React.FC<CrowdAgentLayerProps> = ({ enabled, densi
         rafRef.current = null;
       }
     };
-  }, [active]);
+  }, [active, seed]);
 
   if (!active || agents.length === 0) return null;
 

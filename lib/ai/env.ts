@@ -4,8 +4,8 @@ const schema = z.object({
   LLM_PROVIDER: z.enum(['gemini', 'groq']),
   LLM_MODEL: z.string().min(1),
   LLM_API_KEY: z.string().min(1),
-  // Per-provider-request timeout. Master doc §F4 and docs/ai-layer.md specify
-  // a default of 8000ms. (The "aborts hangs after 15s" line in the master doc
+  // Per-provider-request timeout. Master doc §5 (AI layer) specifies a
+  // default of 8000ms. (The "aborts hangs after 15s" line in the master doc
   // is the CLIENT-side fetch abort in lib/assistant/client.ts, not this
   // per-request provider timeout — 8s per provider call keeps a multi-call
   // planning loop inside that 15s client budget.)

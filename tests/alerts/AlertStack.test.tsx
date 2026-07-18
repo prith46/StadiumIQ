@@ -1,5 +1,5 @@
 import React, { createRef } from 'react';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, fireEvent, screen, act } from '@testing-library/react';
 import { AlertStack } from '@/components/alerts/AlertStack';
 import { useSimStore } from '@/lib/store/simStore';
@@ -80,7 +80,7 @@ describe('AlertStack Component & Hook Integration', () => {
       });
     });
 
-    const { container } = render(<AlertStack mapRef={mapRef} />);
+    render(<AlertStack mapRef={mapRef} />);
 
     // Initial alert matches
     expect(screen.queryByText('Avoid Restroom Rush')).not.toBeNull();

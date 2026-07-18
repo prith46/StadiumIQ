@@ -272,7 +272,7 @@ function ensureChannelListener(set: SetState, get: GetState): void {
  * M29: drives matchClockSec/density/gateStatus purely from elapsed wall time
  * (via `computeSequencerState`) instead of a fixed per-tick increment. Runs
  * independently in every tab once each has the same `(seed, sessionStartedAtMs)`
- * — no per-tick broadcast needed, see docs/match-sequencer.md.
+ * — no per-tick broadcast needed, see docs/STADIUMIQ-MASTER-DOCUMENTATION.md §4 (M29).
  */
 function beginSequencerTick(
   seed: number,

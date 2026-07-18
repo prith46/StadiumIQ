@@ -79,8 +79,16 @@ export function Dashboard() {
     });
   }, [predictedCascades, sos?.active, matchClockSec, gateStatus, density]);
 
-  // Local state for selecting an incident on the map
-  const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
+  // Local state for selecting an incident on the map. The raw selection may
+  // outlive the incident (it resolves elsewhere), so every consumer reads the
+  // DERIVED `selectedIncident` below, which is null once the incident is no
+  // longer active — no effect-driven state clearing needed.
+  const [rawSelectedIncident, setSelectedIncident] = useState<Incident | null>(null);
+  const selectedIncident =
+    rawSelectedIncident &&
+    incidents.some((inc) => inc.id === rawSelectedIncident.id && inc.status !== 'resolved')
+      ? rawSelectedIncident
+      : null;
   const [confirmOrganizerSos, setConfirmOrganizerSos] = useState(false);
   const organizerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -97,16 +105,10 @@ export function Dashboard() {
         }
       });
 
-      // Re-highlight selected incident if it exists and remains active
+      // Re-highlight the selected incident (derived value is null once the
+      // incident resolves, so a stale highlight can never be drawn)
       if (selectedIncident) {
-        const stillActive = incidents.some(
-          (inc) => inc.id === selectedIncident.id && inc.status !== 'resolved'
-        );
-        if (stillActive) {
-          mapRef.current?.highlightZone(selectedIncident.zoneId, { pulse: true });
-        } else {
-          setSelectedIncident(null);
-        }
+        mapRef.current?.highlightZone(selectedIncident.zoneId, { pulse: true });
       }
     }
   }, [incidents, selectedIncident]);

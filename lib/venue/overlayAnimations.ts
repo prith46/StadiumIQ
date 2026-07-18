@@ -13,7 +13,7 @@
  *   AnimatePresence is NOT used for overlay-clear exit timing. This guarantees:
  *     - Primary overlay state is cleared synchronously (test-stable, never flaky).
  *     - The visual fade is fully deterministic with vi.useFakeTimers() in tests.
- *   See docs/M5-highlighting.md §Resolved Design Decision for full rationale.
+ *   See docs/STADIUMIQ-MASTER-DOCUMENTATION.md §4 (M5) for full rationale.
  */
 
 import type { Transition, Variants } from 'framer-motion';

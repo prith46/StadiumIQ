@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import * as React from "react";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { toSpeechLocaleTag } from "./languageTags";
@@ -34,7 +34,7 @@ describe("SpeechRecognition API Wrapper", () => {
   });
 
   it("accumulates finalized transcript across pauses instead of discarding it (Fix 6)", () => {
-    let onresultCallback: (event: any) => void = () => {};
+    let onresultCallback: (event: unknown) => void = () => {};
 
     function mockResult(transcript: string, isFinal: boolean) {
       return Object.assign([{ transcript }], { isFinal });
@@ -47,7 +47,7 @@ describe("SpeechRecognition API Wrapper", () => {
         continuous: false,
         interimResults: false,
         lang: "",
-        set onresult(cb: any) {
+        set onresult(cb: (event: unknown) => void) {
           onresultCallback = cb;
         },
       };
@@ -199,7 +199,7 @@ describe("VoiceInputButton Component Tests", () => {
   });
 
   it("stops listening automatically once a final transcript is received (Fix 5)", () => {
-    let onresultCallback: (event: any) => void = () => {};
+    let onresultCallback: (event: unknown) => void = () => {};
     const mockStart = vi.fn();
     const mockStop = vi.fn();
 
@@ -209,7 +209,7 @@ describe("VoiceInputButton Component Tests", () => {
         stop: mockStop,
         continuous: true,
         interimResults: true,
-        set onresult(cb: any) {
+        set onresult(cb: (event: unknown) => void) {
           onresultCallback = cb;
         },
       };
@@ -236,13 +236,13 @@ describe("VoiceInputButton Component Tests", () => {
   });
 
   it("handles permission denial errors, rendering an inline error alert banner", async () => {
-    let errorHandlerCallback: (err: any) => void = () => {};
+    let errorHandlerCallback: (err: unknown) => void = () => {};
 
     const MockSpeechRecognition = vi.fn().mockImplementation(function() {
       return {
         start: () => {},
         stop: () => {},
-        set onerror(cb: any) {
+        set onerror(cb: (err: unknown) => void) {
           errorHandlerCallback = cb;
         }
       };

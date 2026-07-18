@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { computeSafestExit, SafeExitInput } from './safeExit';
-import { ZONES } from '../venue/venue';
 
 describe('computeSafestExit', () => {
   const defaultGateStatus: Record<string, 'open' | 'congested' | 'closed'> = {

@@ -12,6 +12,7 @@ import { ZONES } from "@/lib/venue/venue"
 import { ChangeSeatControl } from "@/components/onboarding/ChangeSeatControl"
 import { SensoryPreferences } from "@/components/settings/SensoryPreferences"
 import { LanguagePicker } from "@/components/LanguagePicker"
+import { useHasMounted } from "@/lib/hooks/useHasMounted"
 
 interface AppShellProps {
   children: React.ReactNode
@@ -98,15 +99,11 @@ export function AppShell({ children }: AppShellProps) {
   // it directly in a conditional here made ChangeSeatControl/SensoryPreferences
   // appear/disappear between server and client output, shifting every sibling
   // after them (LanguagePicker) into a different DOM position and producing a
-  // hydration mismatch. `hasMounted` starts false on both server and the first
-  // client render (matching output exactly), then flips true in an effect —
-  // which only runs post-hydration — so the location-dependent UI appears via
-  // a normal client-side re-render instead of during hydration itself.
-  const [hasMounted, setHasMounted] = React.useState(false)
-
-  React.useEffect(() => {
-    setHasMounted(true)
-  }, [])
+  // hydration mismatch. `useHasMounted` returns false on both the server and
+  // the hydration render (matching output exactly), then true on post-mount
+  // renders — so the location-dependent UI appears via a normal client-side
+  // re-render instead of during hydration itself.
+  const hasMounted = useHasMounted()
 
   // M29: kick off the automatic match sequencer once per app session — no
   // manual "Start" trigger. Guarded internally (module-level flag) against

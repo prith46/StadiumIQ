@@ -52,7 +52,7 @@ describe("CrowdAgentLayer", () => {
   });
 
   it("cancels the animation frame on unmount", () => {
-    const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(123 as any);
+    const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(123);
     const cancelSpy = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
 
     const { unmount } = render(

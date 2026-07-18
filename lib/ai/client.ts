@@ -105,6 +105,11 @@ async function fetchWithRetry(url: string, options: RequestInit, timeoutMs: numb
           }
           continue; // retry once
         }
+        // Retry exhausted: log the provider's error text server-side so the
+        // real cause is diagnosable, but keep the THROWN message down to the
+        // status code — the retry-path error message is asserted sanitized
+        // (no raw provider text) by tests/ai/client.test.ts.
+        console.error(`[fetchWithRetry] failed after retry: HTTP ${res.status}: ${await extractProviderError(res)}`);
         throw new Error(`HTTP error ${res.status}`);
       }
 
@@ -366,7 +371,9 @@ class GeminiClient implements AiClient {
         }];
       }
 
-      // Configure JSON schema response format if no tools are actively requested on 3rd turn
+      // Tool-less calls (the planning loop's forced final turn, and every
+      // single-shot caller like copilot/debrief) must return the structured
+      // output contract — request it natively via responseSchema.
       if (tools.length === 0) {
         body.generationConfig = {
           responseMimeType: 'application/json',

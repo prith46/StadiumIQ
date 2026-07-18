@@ -34,7 +34,7 @@ export interface DebriefInput {
  * actual recorded response-time figure is `etaSec` — the graph-walk time
  * computed at dispatch (`lib/engine/dispatch.ts`) — so that real, non-
  * fabricated value is used here instead of inventing one. See
- * docs/debrief-report.md.
+ * docs/STADIUMIQ-MASTER-DOCUMENTATION.md §4 (M27).
  */
 export function aggregateDebriefData(state: SimState, edges: Edge[]): DebriefInput {
   const peakByZone = new Map<string, number>();

@@ -1,7 +1,39 @@
 import { describe, it, expect } from 'vitest';
-import { executeTool, TOOL_REGISTRY, UnknownToolError } from '../../lib/ai/tools';
+import { executeTool, UnknownToolError } from '../../lib/ai/tools';
 import { detectStressHeuristic } from '../../lib/ai/stressDetection';
 import { Zone, SimState } from '../../lib/types';
+
+/**
+ * Loose structural view of a tool result for assertions. executeTool's
+ * contract returns `unknown` (each tool has its own shape); tests read
+ * whichever fields the tool under test produces. Fields the tool doesn't
+ * return are simply `undefined` at runtime.
+ */
+interface ToolResultView {
+  __stub: unknown;
+  error: string | undefined;
+  message: string;
+  path: string[];
+  etaSec: number;
+  accessible: boolean | undefined;
+  reason: { crowdedZones: string[]; avoidedGates: Array<{ gateId: string; cause: string }>; etaSec: number };
+  found: boolean | undefined;
+  fromZone: string | undefined;
+  zoneId: string | undefined;
+  minutesAhead: number | undefined;
+  predictedDensity: number | undefined;
+  extrapolated: boolean | undefined;
+  peakCrush: { peakMatchClockSec: number; peakDensity: number; minutesFromNow: number; extrapolated?: boolean };
+  peakMatchClockSec: number | undefined;
+  peakDensity: number | undefined;
+  minutesFromNow: number | undefined;
+  id: string;
+  section: string | undefined;
+}
+
+/** Typed pass-through so call sites don't each need an explicit-any cast. */
+const runTool = <T = ToolResultView>(...args: Parameters<typeof executeTool>): Promise<T> =>
+  executeTool(...args) as Promise<T>;
 
 describe('AI Tools Registry', () => {
   const dummyState: SimState = {
@@ -42,7 +74,7 @@ describe('AI Tools Registry', () => {
   // ordering behavior under test (top-3 by hop distance) is unchanged.
   it('findAmenity returns top open/busy POIs sorted by distance', async () => {
     // We execute the findAmenity tool
-    const results: any = await executeTool('findAmenity', {
+    const results = await runTool<ToolResultView[]>('findAmenity', {
       fromZoneId: 'sec-101',
       type: 'restroom',
       nearestOpen: true,
@@ -52,7 +84,7 @@ describe('AI Tools Registry', () => {
     expect(results.length).toBeLessThanOrEqual(3);
 
     // Verifiable top-3 order by BFS hop distance from sec-101 on the real venue graph.
-    expect(results.map((p: any) => p.id)).toEqual([
+    expect(results.map((p) => p.id)).toEqual([
       'poi-restroom-4',
       'poi-restroom-3',
       'poi-restroom-1',
@@ -84,7 +116,7 @@ describe('AI Tools Registry', () => {
 
   // 3. getPolicy retrieves text chunks from the RAG knowledge base
   it('getPolicy executes keyword retrieval on the RAG index', async () => {
-    const results: any = await executeTool('getPolicy', { query: 'bag policy size limit' }, ctx);
+    const results = await runTool<ToolResultView[]>('getPolicy', { query: 'bag policy size limit' }, ctx);
     expect(results).toBeInstanceOf(Array);
     expect(results.length).toBeGreaterThan(0);
     expect(results[0].section).toBe('Bag Policy');
@@ -92,7 +124,7 @@ describe('AI Tools Registry', () => {
 
   // 4. computeRoute — real implementation (NOT a stub)
   it('computeRoute returns a valid RouteResult for a real zone-to-zone query', async () => {
-    const result: any = await executeTool('computeRoute', {
+    const result = await runTool('computeRoute', {
       originZoneId: 'sec-101',
       destination: { kind: 'zone', zoneId: 'gate-a' },
     }, ctx);
@@ -112,7 +144,7 @@ describe('AI Tools Registry', () => {
   });
 
   it('computeRoute accepts legacy fromZoneId alias for backward compatibility', async () => {
-    const result: any = await executeTool('computeRoute', {
+    const result = await runTool('computeRoute', {
       fromZoneId: 'sec-101',        // legacy alias
       destination: { kind: 'nearestExit' },
     }, ctx);
@@ -124,7 +156,7 @@ describe('AI Tools Registry', () => {
   });
 
   it('computeRoute returns structured error for hallucinated/invalid origin zone id', async () => {
-    const result: any = await executeTool('computeRoute', {
+    const result = await runTool('computeRoute', {
       originZoneId: 'hallucinated-zone-XYZ-9999',
       destination: { kind: 'zone', zoneId: 'gate-a' },
     }, ctx);
@@ -136,7 +168,7 @@ describe('AI Tools Registry', () => {
   });
 
   it('computeRoute returns structured error for hallucinated destination zone id', async () => {
-    const result: any = await executeTool('computeRoute', {
+    const result = await runTool('computeRoute', {
       originZoneId: 'sec-101',
       destination: { kind: 'zone', zoneId: 'hallucinated-destination-999' },
     }, ctx);
@@ -150,7 +182,7 @@ describe('AI Tools Registry', () => {
     // use a real type but mark all as closed by using a poiStatus in ctx
     // For simplicity, use a clearly nonexistent type string (invalid for PoiType but
     // the tool casts it — this tests the no_matching_poi path)
-    const result: any = await executeTool('computeRoute', {
+    const result = await runTool('computeRoute', {
       originZoneId: 'sec-101',
       destination: { kind: 'poiType', poiType: 'restroom' },
     }, {
@@ -173,7 +205,7 @@ describe('AI Tools Registry', () => {
       fanContext: { language: 'en', accessibility: false, sensory: { quiet: true } },
     };
 
-    const result: any = await executeTool('computeRoute', {
+    const result = await runTool('computeRoute', {
       originZoneId: 'sec-101',
       destination: { kind: 'zone', zoneId: 'gate-a' },
     }, sensoryCtx);
@@ -190,12 +222,12 @@ describe('AI Tools Registry', () => {
       fanContext: { language: 'en', accessibility: false, sensory: { quiet: true } },
     };
 
-    const noFilterResult: any = await executeTool('computeRoute', {
+    const noFilterResult = await runTool('computeRoute', {
       originZoneId: 'sec-101',
       destination: { kind: 'zone', zoneId: 'gate-a' },
     }, sensoryCtx);
 
-    const overriddenResult: any = await executeTool('computeRoute', {
+    const overriddenResult = await runTool('computeRoute', {
       originZoneId: 'sec-101',
       destination: { kind: 'zone', zoneId: 'gate-a' },
       filters: { avoidEnclosed: false },
@@ -209,7 +241,7 @@ describe('AI Tools Registry', () => {
   });
 
   it('empty/undefined fanContext.sensory produces routing identical to pre-M10 behavior', async () => {
-    const result: any = await executeTool('computeRoute', {
+    const result = await runTool('computeRoute', {
       originZoneId: 'sec-101',
       destination: { kind: 'zone', zoneId: 'gate-a' },
     }, ctx);
@@ -220,7 +252,7 @@ describe('AI Tools Registry', () => {
 
   // 5. getIncentive returns an explicit "not found" contract when no incentive is active
   it('getIncentive returns found: false with a message when no incentive is active', async () => {
-    const incentiveRes: any = await executeTool('getIncentive', { fromZoneId: 'sec-101' }, ctx);
+    const incentiveRes = await runTool('getIncentive', { fromZoneId: 'sec-101' }, ctx);
     expect(incentiveRes.found).toBe(false);
     expect(incentiveRes.fromZone).toBe('sec-101');
     expect(typeof incentiveRes.message).toBe('string');
@@ -237,7 +269,7 @@ describe('AI Tools Registry', () => {
     const contextWithTimeline = { ...ctx, simSnapshot: stateWithTimeline };
 
     // 10 minutes relative = 600 seconds
-    const result: any = await executeTool('getForecast', { zoneId: 'sec-101', timeSec: 600 }, contextWithTimeline);
+    const result = await runTool('getForecast', { zoneId: 'sec-101', timeSec: 600 }, contextWithTimeline);
 
     expect(result.error).toBeUndefined();
     expect(result.zoneId).toBe('sec-101');
@@ -257,7 +289,7 @@ describe('AI Tools Registry', () => {
     const contextWithTimeline = { ...ctx, simSnapshot: stateWithTimeline };
 
     // Large timeSec (e.g. 10000s) -> clamped to maximum horizon (7200s / 120 minutes)
-    const result: any = await executeTool('getForecast', { zoneId: 'sec-101', timeSec: 10000 }, contextWithTimeline);
+    const result = await runTool('getForecast', { zoneId: 'sec-101', timeSec: 10000 }, contextWithTimeline);
 
     expect(result.error).toBeUndefined();
     expect(result.minutesAhead).toBe(120); // clamped to 120m
@@ -266,10 +298,10 @@ describe('AI Tools Registry', () => {
   });
 
   it('getForecast and getPeakCrush return structured error for invalid/hallucinated zoneId', async () => {
-    const resultForecast: any = await executeTool('getForecast', { zoneId: 'invalid-zone-xyz', timeSec: 100 }, ctx);
+    const resultForecast = await runTool('getForecast', { zoneId: 'invalid-zone-xyz', timeSec: 100 }, ctx);
     expect(resultForecast.error).toBe('invalid_zone_id');
 
-    const resultPeak: any = await executeTool('getPeakCrush', { zoneId: 'invalid-zone-xyz' }, ctx);
+    const resultPeak = await runTool('getPeakCrush', { zoneId: 'invalid-zone-xyz' }, ctx);
     expect(resultPeak.error).toBe('invalid_zone_id');
   });
 
@@ -282,7 +314,7 @@ describe('AI Tools Registry', () => {
     const stateWithTimeline = { ...dummyState, timeline: mockTimeline, matchClockSec: 0 };
     const contextWithTimeline = { ...ctx, simSnapshot: stateWithTimeline };
 
-    const result: any = await executeTool('getPeakCrush', { zoneId: 'sec-101' }, contextWithTimeline);
+    const result = await runTool('getPeakCrush', { zoneId: 'sec-101' }, contextWithTimeline);
 
     expect(result.error).toBeUndefined();
     expect(result.zoneId).toBe('sec-101');

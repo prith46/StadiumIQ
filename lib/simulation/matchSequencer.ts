@@ -50,7 +50,7 @@ export function initSequencer(): SequencerState {
  * Pure: derives the current phase/clock purely from elapsed wall time. Given
  * the same `(seed, sessionStartedAtMs, nowMs)`, every tab (independently)
  * computes the identical result — this is the entire cross-tab sync
- * mechanism; see docs/match-sequencer.md.
+ * mechanism; see docs/STADIUMIQ-MASTER-DOCUMENTATION.md §4 (M29).
  */
 export function computeSequencerState(seed: number, sessionStartedAtMs: number, nowMs: number): SequencerState {
   const elapsedSec = Math.max(0, (nowMs - sessionStartedAtMs) / 1000);

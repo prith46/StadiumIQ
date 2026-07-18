@@ -33,15 +33,19 @@ export function AssistantPanel({
   const [isThinking, setIsThinking] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [lastUserMessageText, setLastUserMessageText] = useState<string | null>(null);
-  const [activeSpeakingId, setActiveSpeakingId] = useState<string | null>(null);
+  const [speakingId, setSpeakingId] = useState<string | null>(null);
 
   const ttsEnabled = useA11yStore((state) => state.ttsEnabled);
+
+  // While TTS is off, no message can be "speaking" — derived at render instead
+  // of cleared via effect setState, so the effect only syncs the external
+  // speech-synthesis system.
+  const activeSpeakingId = ttsEnabled ? speakingId : null;
 
   // Stop speaking if TTS is turned off
   useEffect(() => {
     if (!ttsEnabled) {
       stopSpeaking();
-      setActiveSpeakingId(null);
     }
   }, [ttsEnabled]);
 
@@ -55,14 +59,14 @@ export function AssistantPanel({
   const handleSpeakToggle = (messageId: string, textContent: string) => {
     if (activeSpeakingId === messageId) {
       stopSpeaking();
-      setActiveSpeakingId(null);
+      setSpeakingId(null);
     } else {
       const locale = toSpeechLocaleTag(fanContext.language || 'en');
       const spoke = speak(textContent, locale, () => {
-        setActiveSpeakingId(null);
+        setSpeakingId(null);
       });
       if (spoke) {
-        setActiveSpeakingId(messageId);
+        setSpeakingId(messageId);
       }
     }
   };
@@ -81,7 +85,7 @@ export function AssistantPanel({
 
     // Interrupt any active speaking streams on new message
     stopSpeaking();
-    setActiveSpeakingId(null);
+    setSpeakingId(null);
 
     setErrorMsg(null);
     setLastUserMessageText(text);
@@ -163,10 +167,10 @@ export function AssistantPanel({
         if (ttsEnabled) {
           const locale = toSpeechLocaleTag(fanContext.language || 'en');
           const spoke = speak(fullResponse.message, locale, () => {
-            setActiveSpeakingId(null);
+            setSpeakingId(null);
           });
           if (spoke) {
-            setActiveSpeakingId(finalMsgId);
+            setSpeakingId(finalMsgId);
           }
         }
 

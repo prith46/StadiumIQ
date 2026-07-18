@@ -130,6 +130,7 @@ describe("F2: Venue Graph & Data Model Tests (MAP BUILD SPEC §22)", () => {
     expect(noEdges).toEqual([]);
 
     const pois = getPoisNear(ZONES.find((z) => z.type === "section")!.id);
+    expect(Array.isArray(pois)).toBe(true);
     // Some section is nearestZone for at least one POI (nearestSectionInTier assignment)
     expect(POIS.some((p) => p.nearestZone.startsWith("sec-"))).toBe(true);
 

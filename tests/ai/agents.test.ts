@@ -1,6 +1,6 @@
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { runFanAssistant, FALLBACK_RESPONSE } from '../../lib/ai/agents';
-import { Zone, SimState, FanContext } from '../../lib/types';
+import { SimState, FanContext } from '../../lib/types';
 
 const mockChat = vi.fn();
 const mockVisionChat = vi.fn();
@@ -156,7 +156,7 @@ describe('AI Agentic Planners', () => {
   // 4. Multi-turn tool calling cap (max 2 round-trips)
   it('limits tool calls loop to exactly 2 round-trips then forces final text response', async () => {
     // Return tool call for first 2 calls, then final answer on 3rd call (when tools array is empty)
-    mockChat.mockImplementation((messages: any, tools: any) => {
+    mockChat.mockImplementation((messages: unknown, tools: unknown[]) => {
       if (tools.length > 0) {
         return Promise.resolve({
           text: null,
